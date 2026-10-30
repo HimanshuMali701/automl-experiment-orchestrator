@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# MLflow runs and artifacts
+mlruns/
+mlruns.db
+.mlflow/
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploaded or temporary datasets
+data/
+dataset/
+uploads/
+artifacts/
+
+# Pytest & coverage cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment files
+.env
+.env.local
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
