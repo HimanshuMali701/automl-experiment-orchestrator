@@ -13,6 +13,8 @@ from automl.core.logging import get_logger
 from automl.profiler.loader import load_dataset
 from automl.profiler.profiler import profile_dataset
 from automl.profiler.validator import validate_dataset
+from automl.planner.explainer import explain_experiment_results
+from automl.planner.proposer import propose_experiment_plan
 from automl.trainer.engine import ExperimentEngine, build_default_experiment_config
 from automl.workflow.registry import DatasetRegistry
 from automl.workflow.state import (
@@ -96,7 +98,7 @@ def profile_data_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
 
 
 def create_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
-    """Node: Generate deterministic baseline and candidate experiment plan."""
+    """Node: Generate experiment plan (via LLM planner if requested, else deterministic baseline)."""
     trace = list(state.get("execution_trace", []))
     trace.append("create_plan")
     logger.info("Executing node: create_plan")
@@ -106,6 +108,7 @@ def create_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
         if state.get("plan") is not None:
             return {
                 "plan": state["plan"],
+                "plan_metadata": state.get("plan_metadata", {"source": "user_provided"}),
                 "execution_trace": trace,
             }
 
@@ -113,9 +116,15 @@ def create_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
         if profile is None:
             raise ExperimentPlanError("Cannot create plan: dataset profile is missing.")
 
-        plan = build_default_experiment_config(profile)
+        if state.get("use_llm_planner", False):
+            plan, plan_meta = propose_experiment_plan(profile, fallback_to_default=True)
+        else:
+            plan = build_default_experiment_config(profile)
+            plan_meta = {"source": "deterministic"}
+
         return {
             "plan": plan,
+            "plan_metadata": plan_meta,
             "execution_trace": trace,
         }
     except Exception as e:
@@ -317,11 +326,20 @@ def rank_leaderboard_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
 
 
 def finalize_workflow_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
-    """Node: Wrap up execution trace and set final termination state."""
+    """Node: Wrap up execution trace, generate grounded result explanation, and set final state."""
     trace = list(state.get("execution_trace", []))
     trace.append("finalize_workflow")
     logger.info(f"Finalizing workflow with status: {state.get('workflow_status')}")
 
+    explanation = None
+    exp_res = state.get("experiment_result")
+    if exp_res is not None:
+        try:
+            explanation = explain_experiment_results(exp_res)
+        except Exception as e:
+            logger.warning(f"Could not generate result explanation: {str(e)}")
+
     return {
+        "result_explanation": explanation,
         "execution_trace": trace,
     }

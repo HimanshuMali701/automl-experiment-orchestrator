@@ -175,6 +175,7 @@ def run_orchestration_workflow(
     target_column: Optional[str] = None,
     task_type_override: Optional[TaskType] = None,
     plan: Optional[ExperimentConfig] = None,
+    use_llm_planner: bool = False,
     max_retries: int = 2,
     thread_id: Optional[str] = None,
 ) -> ExperimentWorkflowState:
@@ -185,6 +186,7 @@ def run_orchestration_workflow(
         target_column: Target column for supervised prediction.
         task_type_override: Optional task type override.
         plan: Optional custom experiment plan.
+        use_llm_planner: Whether to use LLM planner for plan creation.
         max_retries: Maximum bounded retry count for recoverable failures.
         thread_id: Optional checkpointer thread ID.
 
@@ -201,9 +203,12 @@ def run_orchestration_workflow(
         "dataset_metadata": {},
         "profile": None,
         "plan": plan,
+        "plan_metadata": {},
+        "use_llm_planner": use_llm_planner,
         "candidate_runs": [],
         "experiment_result": None,
         "best_candidate_name": None,
+        "result_explanation": None,
         "workflow_status": WorkflowStatus.INITIALIZED,
         "error_category": ErrorCategory.NONE,
         "error_message": None,

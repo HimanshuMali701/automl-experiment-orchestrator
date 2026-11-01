@@ -48,11 +48,14 @@ class ExperimentWorkflowState(TypedDict):
     # Analysis & planning artifacts
     profile: Optional[DatasetProfile]
     plan: Optional[ExperimentConfig]
+    plan_metadata: Dict[str, Any]
+    use_llm_planner: bool
 
     # Execution & results
     candidate_runs: List[CandidateRunResult]
     experiment_result: Optional[ExperimentResult]
     best_candidate_name: Optional[str]
+    result_explanation: Optional[Any]
 
     # Diagnostics, error taxonomy & loop control
     workflow_status: WorkflowStatus
