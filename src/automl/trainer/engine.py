@@ -157,6 +157,8 @@ class ExperimentEngine:
         data: Union[str, pd.DataFrame],
         profile: DatasetProfile,
         config: ExperimentConfig,
+        tracker: Optional[Any] = None,
+        enable_tracking: bool = False,
     ) -> ExperimentResult:
         """Run an end-to-end experiment with cross-validation and held-out test evaluation.
 
@@ -164,6 +166,8 @@ class ExperimentEngine:
             data: Raw DataFrame or path to CSV file.
             profile: DatasetProfile from Phase 1.
             config: Validated ExperimentConfig.
+            tracker: Optional MLflowTracker instance.
+            enable_tracking: If True and tracker is None, instantiates default MLflowTracker.
 
         Returns:
             ExperimentResult: Complete experiment output with ranked leaderboard and fold details.
@@ -287,6 +291,7 @@ class ExperimentEngine:
 
         # 7. Final held-out test evaluation on the selected best model
         best_candidate_name = None
+        final_fitted_pipeline = None
         successful_candidates = [r for r in ranked_leaderboard if r.status == RunStatus.SUCCESS]
 
         if successful_candidates:
@@ -303,6 +308,8 @@ class ExperimentEngine:
                 final_pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", estimator)])
 
                 final_pipeline.fit(X_train, y_train)
+                final_fitted_pipeline = final_pipeline
+
                 y_test_pred = final_pipeline.predict(X_test)
                 y_test_proba = (
                     final_pipeline.predict_proba(X_test)
@@ -325,7 +332,7 @@ class ExperimentEngine:
 
         total_exec_time = round(time.time() - start_time, 2)
 
-        return ExperimentResult(
+        exp_result = ExperimentResult(
             task_type=config.task_type,
             target_column=config.target_column,
             primary_metric=config.primary_metric,
@@ -336,6 +343,30 @@ class ExperimentEngine:
             test_rows=test_rows,
             warnings=warnings,
         )
+
+        # 8. MLflow Experiment Tracking
+        active_tracker = tracker
+        if active_tracker is None and enable_tracking:
+            try:
+                from automl.tracking.tracker import MLflowTracker
+                active_tracker = MLflowTracker(settings=self.settings)
+            except Exception as e:
+                logger.warning(f"Could not initialize MLflowTracker: {str(e)}")
+
+        if active_tracker is not None:
+            try:
+                active_tracker.log_experiment(
+                    dataset_source=data,
+                    profile=profile,
+                    config=config,
+                    result=exp_result,
+                    final_fitted_pipeline=final_fitted_pipeline,
+                )
+            except Exception as e:
+                logger.warning(f"MLflow tracking failed: {str(e)}")
+                exp_result.warnings.append(f"MLflow tracking failed: {str(e)}")
+
+        return exp_result
 
     def _evaluate_candidate(
         self,

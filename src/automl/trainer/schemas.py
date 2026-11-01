@@ -210,4 +210,6 @@ class ExperimentResult(BaseModel):
     total_execution_time_seconds: float = 0.0
     train_rows: int
     test_rows: int
+    mlflow_run_id: Optional[str] = None
+    mlflow_experiment_id: Optional[str] = None
     warnings: List[str] = Field(default_factory=list)

@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     base_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[3])
     data_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[3] / "data")
     artifacts_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[3] / "artifacts")
-    mlflow_tracking_uri: str = "sqlite:///mlruns.db"
+    mlflow_tracking_uri: str = "file:./mlruns"
     mlflow_default_experiment_name: str = "automl-experiments"
 
     # Resource bounds & safety guards
