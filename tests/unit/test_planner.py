@@ -15,6 +15,7 @@ from automl.planner import (
     propose_experiment_plan,
     validate_experiment_proposal,
 )
+from automl.planner.provider import DEFAULT_GROQ_MODEL, get_llm_provider
 from automl.planner.schemas import ProposedModelConfig, ProposedPreprocessingConfig
 from automl.trainer.schemas import (
     CandidateRunResult,
@@ -163,9 +164,11 @@ def test_unsupported_model_triggers_fallback_in_proposer(
     assert config.candidates[0].is_baseline is True
 
 
-def test_missing_credentials_fallback(sample_binary_classification_df: pd.DataFrame):
+def test_missing_credentials_fallback(sample_binary_classification_df: pd.DataFrame, monkeypatch):
     """Verify clean deterministic fallback when no LLM API key is configured."""
     profile = profile_dataset(sample_binary_classification_df, target_column="churn")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setattr("automl.planner.provider.get_settings", lambda: MagicMock(groq_api_key=None))
 
     # Pass llm=None and empty settings
     config, metadata = propose_experiment_plan(profile, llm=None, fallback_to_default=True)
@@ -247,4 +250,70 @@ def test_workflow_with_llm_planner_and_explanation(
     assert final_state["best_candidate_name"] is not None
     assert final_state["result_explanation"] is not None
     assert final_state["result_explanation"].champion_model == final_state["best_candidate_name"]
+
+
+def test_groq_provider_with_custom_llm():
+    """Verify that injecting a custom LLM bypasses Groq API key checks and initialization."""
+    custom_model = MockChatModel(response_text="test")
+    provider = get_llm_provider(custom_llm=custom_model)
+    assert provider is custom_model
+
+
+def test_groq_provider_missing_credentials(monkeypatch):
+    """Verify that get_llm_provider returns None when GROQ_API_KEY is not set."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    monkeypatch.setattr("automl.planner.provider.get_settings", lambda: MagicMock(groq_api_key=None))
+
+    provider = get_llm_provider()
+    assert provider is None
+
+
+def test_groq_provider_successful_initialization(monkeypatch):
+    """Verify that get_llm_provider instantiates ChatGroq with expected parameters when key is set."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_mock_test_key_abc123")
+    monkeypatch.setenv("GROQ_MODEL", "openai/gpt-oss-20b")
+
+    mock_chat_groq_class = MagicMock()
+    monkeypatch.setattr("langchain_groq.ChatGroq", mock_chat_groq_class)
+
+    provider = get_llm_provider()
+
+    assert provider is not None
+    mock_chat_groq_class.assert_called_once()
+    call_kwargs = mock_chat_groq_class.call_args.kwargs
+    assert call_kwargs["model"] == "openai/gpt-oss-20b"
+    assert call_kwargs["api_key"] == "gsk_mock_test_key_abc123"
+    assert call_kwargs["temperature"] == 0.0
+
+
+def test_groq_provider_import_error_fallback(monkeypatch):
+    """Verify graceful deterministic fallback when langchain_groq cannot be imported."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_mock_test_key_abc123")
+
+    import builtins
+    orig_import = builtins.__import__
+
+    def mock_import(name, *args, **kwargs):
+        if name == "langchain_groq":
+            raise ImportError("No module named 'langchain_groq'")
+        return orig_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", mock_import)
+
+    provider = get_llm_provider()
+    assert provider is None
+
+
+def test_groq_provider_initialization_error_fallback(monkeypatch):
+    """Verify graceful deterministic fallback when ChatGroq initialization raises an exception."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_mock_test_key_abc123")
+
+    def failing_chat_groq(*args, **kwargs):
+        raise ValueError("Failed to establish secure connection to Groq API")
+
+    monkeypatch.setattr("langchain_groq.ChatGroq", failing_chat_groq)
+
+    provider = get_llm_provider()
+    assert provider is None
+
 

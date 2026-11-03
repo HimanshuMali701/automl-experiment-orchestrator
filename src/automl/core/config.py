@@ -44,9 +44,10 @@ class Settings(BaseSettings):
     api_host: str = "127.0.0.1"
     api_port: int = 8000
 
-    # Optional LLM integration
-    openai_api_key: Optional[str] = None
-    llm_model_name: str = "gpt-4o-mini"
+    # Optional LLM integration (Groq)
+    groq_api_key: Optional[str] = None
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_model_name: str = "openai/gpt-oss-20b"
     llm_temperature: float = 0.0
 
     def ensure_directories(self) -> None:
