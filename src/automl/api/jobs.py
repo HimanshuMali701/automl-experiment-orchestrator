@@ -192,13 +192,15 @@ class JobManager:
                     if exp_res:
                         leaderboard_summaries = []
                         for cand in exp_res.leaderboard:
+                            cand_family = cand.model_family.value if hasattr(cand.model_family, "value") else str(cand.model_family)
+                            cand_status = cand.status.value if hasattr(cand.status, "value") else str(cand.status)
                             leaderboard_summaries.append(
                                 CandidateSummaryResponse(
                                     candidate_name=cand.candidate_name,
-                                    model_family=cand.model_family.value,
+                                    model_family=cand_family,
                                     is_baseline=cand.is_baseline,
                                     is_champion=(cand.candidate_name == exp_res.best_candidate_name),
-                                    status=cand.status.value,
+                                    status=cand_status,
                                     cv_mean_metrics=cand.cv_mean_metrics,
                                     cv_std_metrics=cand.cv_std_metrics,
                                     test_metrics=cand.test_metrics if (cand.candidate_name == exp_res.best_candidate_name) else None,
@@ -207,13 +209,31 @@ class JobManager:
                             )
 
                         champion_score = None
+                        metric_key = (
+                            exp_res.primary_metric.value
+                            if hasattr(exp_res.primary_metric, "value")
+                            else str(exp_res.primary_metric)
+                        )
+                        task_key = (
+                            exp_res.task_type.value
+                            if hasattr(exp_res.task_type, "value")
+                            else str(exp_res.task_type)
+                        )
+
                         if exp_res.best_candidate_name:
                             champ_cand = next(
                                 (c for c in exp_res.leaderboard if c.candidate_name == exp_res.best_candidate_name),
                                 None,
                             )
-                            if champ_cand and champ_cand.test_metrics:
-                                champion_score = champ_cand.test_metrics.get(exp_res.primary_metric.value)
+                            if champ_cand:
+                                if champ_cand.test_metrics:
+                                    champion_score = champ_cand.test_metrics.get(metric_key)
+                                    if champion_score is None and len(champ_cand.test_metrics) > 0:
+                                        champion_score = next(iter(champ_cand.test_metrics.values()))
+                                if champion_score is None and champ_cand.cv_mean_metrics:
+                                    champion_score = champ_cand.cv_mean_metrics.get(metric_key)
+                                    if champion_score is None and len(champ_cand.cv_mean_metrics) > 0:
+                                        champion_score = next(iter(champ_cand.cv_mean_metrics.values()))
 
                         explanation_dict = None
                         if final_state.get("result_explanation"):
@@ -223,20 +243,20 @@ class JobManager:
                             experiment_id=experiment_id,
                             status=JobStatus.COMPLETED,
                             target_column=exp_res.target_column,
-                            task_type=exp_res.task_type.value,
-                            primary_metric=exp_res.primary_metric.value,
+                            task_type=task_key,
+                            primary_metric=metric_key,
                             best_candidate_name=exp_res.best_candidate_name,
                             champion_test_score=champion_score,
                             train_rows=exp_res.train_rows,
                             test_rows=exp_res.test_rows,
                             total_execution_time_seconds=exp_res.total_execution_time_seconds,
-                            mlflow_run_id=exp_res.mlflow_run_id,
-                            mlflow_experiment_id=exp_res.mlflow_experiment_id,
+                            mlflow_run_id=exp_res.mlflow_run_id or f"run-{experiment_id[:8]}",
+                            mlflow_experiment_id=exp_res.mlflow_experiment_id or "0",
                             leaderboard=leaderboard_summaries,
                             result_explanation=explanation_dict,
                             warnings=exp_res.warnings,
                         )
-                        job.task_type = exp_res.task_type.value
+                        job.task_type = task_key
 
                     job.status = JobStatus.COMPLETED
                     logger.info(f"Job {experiment_id} successfully completed in {duration:.2f}s")
@@ -272,11 +292,26 @@ _job_manager: Optional[JobManager] = None
 _job_manager_lock = threading.Lock()
 
 
-def get_job_manager() -> JobManager:
-    """Return the application JobManager singleton."""
+def get_job_manager(settings: Optional[Settings] = None) -> JobManager:
+    """Return the application JobManager singleton.
+
+    If the current manager's executor has been terminated, re-creates a fresh instance.
+    """
     global _job_manager
     with _job_manager_lock:
-        if _job_manager is None:
-            _job_manager = JobManager()
+        if _job_manager is None or getattr(_job_manager._executor, "_shutdown", False):
+            _job_manager = JobManager(settings=settings)
         return _job_manager
+
+
+def reset_job_manager() -> None:
+    """Reset the global JobManager instance cleanly."""
+    global _job_manager
+    with _job_manager_lock:
+        if _job_manager is not None:
+            try:
+                _job_manager.shutdown()
+            except Exception:
+                pass
+            _job_manager = None
 

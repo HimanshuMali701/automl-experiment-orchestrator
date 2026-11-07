@@ -16,15 +16,19 @@ from automl.core.config import Settings
 @pytest.fixture
 def api_client(tmp_path) -> Generator[TestClient, None, None]:
     """Provide an isolated FastAPI TestClient with temporary storage."""
+    from automl.api.jobs import reset_job_manager
+    reset_job_manager()
+
     test_settings = Settings(
         artifacts_dir=tmp_path / "artifacts",
         data_dir=tmp_path / "data",
+        mlflow_tracking_uri=f"file:{tmp_path / 'mlruns'}",
         max_concurrent_jobs=2,
     )
     test_settings.ensure_directories()
-    app = create_app(settings=test_settings)
-    with TestClient(app) as client:
-        yield client
+    app = create_app(settings=test_settings, enable_lifespan=False)
+    yield TestClient(app)
+    reset_job_manager()
 
 
 @pytest.fixture

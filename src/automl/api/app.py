@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     get_job_manager().shutdown()
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, enable_lifespan: bool = True) -> FastAPI:
     """Instantiate and configure the FastAPI application."""
     cfg = settings or get_settings()
 
@@ -40,7 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "Supports dataset profiling, task detection, stateful workflow orchestration, "
             "leakage-free model benchmarking, and MLflow experiment tracking."
         ),
-        lifespan=lifespan,
+        lifespan=lifespan if enable_lifespan else None,
     )
 
     # 1. CORS Middleware (allows local frontend dashboard communication)

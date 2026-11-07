@@ -206,6 +206,7 @@ def execute_experiments_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
             data=source,
             profile=state["profile"],
             config=state["plan"],
+            enable_tracking=True,
         )
 
         return {

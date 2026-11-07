@@ -23,7 +23,7 @@ from automl.core.exceptions import (
 from automl.core.logging import get_logger
 from automl.profiler.loader import load_dataset
 from automl.profiler.profiler import profile_dataset
-from automl.profiler.schemas import TaskType
+from automl.profiler.schemas import DataType, TaskType
 from automl.trainer.schemas import MetricName
 
 logger = get_logger("api.routes")
@@ -109,7 +109,7 @@ async def validate_dataset(
     # 4. Profile dataset using Phase 1 engine
     try:
         profile = profile_dataset(
-            source=content,
+            content,
             target_column=target_column.strip() if target_column else None,
             task_type_override=parsed_override,
         )
@@ -124,6 +124,9 @@ async def validate_dataset(
             else:
                 rec_metric = "rmse"
 
+        numeric_cols = [c for c, p in profile.columns.items() if p.inferred_type == DataType.NUMERIC]
+        cat_cols = [c for c, p in profile.columns.items() if p.inferred_type in (DataType.CATEGORICAL, DataType.BOOLEAN, DataType.TEXT)]
+
         return DatasetValidationResponse(
             is_valid=True,
             row_count=profile.row_count,
@@ -131,12 +134,12 @@ async def validate_dataset(
             target_column=target_column,
             detected_task_type=detected_task,
             recommended_primary_metric=rec_metric,
-            data_quality_warnings=profile.data_quality_warnings,
-            column_types={c: p.inferred_type.value for c, p in profile.column_profiles.items()},
-            missing_value_counts={c: p.missing_count for c, p in profile.column_profiles.items()},
-            numerical_columns=profile.numerical_columns,
-            categorical_columns=profile.categorical_columns,
-            duplicate_rows=profile.duplicate_row_count,
+            data_quality_warnings=[w.message if hasattr(w, "message") else str(w) for w in profile.warnings],
+            column_types={c: p.inferred_type.value for c, p in profile.columns.items()},
+            missing_value_counts={c: p.missing_count for c, p in profile.columns.items()},
+            numerical_columns=numeric_cols,
+            categorical_columns=cat_cols,
+            duplicate_rows=profile.duplicate_rows,
         )
 
     except (DatasetValidationError, ProfilingError) as e:

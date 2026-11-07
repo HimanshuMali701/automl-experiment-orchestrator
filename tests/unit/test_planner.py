@@ -189,8 +189,9 @@ def test_provider_api_error_fallback(sample_binary_classification_df: pd.DataFra
     assert "Simulated LLM provider service outage" in metadata["reason"]
 
 
-def test_result_explainer_grounded_in_data():
+def test_result_explainer_grounded_in_data(monkeypatch):
     """Verify that result explanation adheres strictly to recorded metrics without hallucination."""
+    monkeypatch.setattr("automl.planner.explainer.get_llm_provider", lambda **kw: None)
     res = ExperimentResult(
         task_type=TaskType.BINARY_CLASSIFICATION,
         target_column="churn",
