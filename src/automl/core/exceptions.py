@@ -50,3 +50,8 @@ class TrackingError(AutoMLError):
 class OrchestrationError(AutoMLError):
     """Raised when LangGraph workflow transitions or state updates encounter failures."""
     pass
+
+
+class ResourceExhaustionError(AutoMLError):
+    """Raised when server or worker capacity limits (e.g. concurrent jobs) are exceeded."""
+    pass

@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     # API settings
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    max_concurrent_jobs: int = 2
 
     # Optional LLM integration (Groq)
     groq_api_key: Optional[str] = None
