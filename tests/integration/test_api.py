@@ -141,6 +141,50 @@ def test_get_results_when_job_not_completed(api_client: TestClient):
     assert "currently in state 'running'" in response.json()["detail"]
 
 
+def test_get_results_when_job_failed(api_client: TestClient):
+    """Verify 422 Unprocessable Entity when retrieving results for a failed job."""
+    from automl.api.jobs import get_job_manager
+
+    manager = get_job_manager()
+    dummy_job = JobRecord(
+        experiment_id="test-failed-job-456",
+        status=JobStatus.FAILED,
+        target_column="churn",
+        created_at="2026-11-06T00:00:00Z",
+        error_message="Workflow failed: All model candidates failed during training.",
+    )
+    with manager._lock:
+        manager._jobs[dummy_job.experiment_id] = dummy_job
+
+    response = api_client.get("/experiments/test-failed-job-456/results")
+    assert response.status_code == 422
+    assert "failed" in response.json()["detail"].lower()
+
+
+def test_concurrent_job_limit_exhaustion(api_client: TestClient, csv_bytes: bytes):
+    """Verify 429 Too Many Requests when active jobs reach max_concurrent_jobs."""
+    from automl.api.jobs import get_job_manager
+
+    manager = get_job_manager()
+    for i in range(2):
+        dummy_job = JobRecord(
+            experiment_id=f"test-capacity-job-{i}",
+            status=JobStatus.RUNNING,
+            target_column="churn",
+            created_at="2026-11-06T00:00:00Z",
+        )
+        with manager._lock:
+            manager._jobs[dummy_job.experiment_id] = dummy_job
+
+    response = api_client.post(
+        "/experiments",
+        files={"file": ("dataset.csv", csv_bytes, "text/csv")},
+        data={"target_column": "churn"},
+    )
+    assert response.status_code == 429
+    assert "capacity" in response.json()["detail"].lower()
+
+
 def test_experiment_submission_missing_target(api_client: TestClient, csv_bytes: bytes):
     """Verify 422 when target column does not exist in dataset."""
     response = api_client.post(

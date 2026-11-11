@@ -122,6 +122,8 @@ def main():
     print(" HOW TO RUN THE FASTAPI SERVER")
     print("=" * 80)
     print("To launch the live API server with automatic reload:")
+    print("   uvicorn automl.api.app:app --app-dir src --host 127.0.0.1 --port 8000 --reload")
+    print("Or:")
     print("   uvicorn automl.api.app:app --host 127.0.0.1 --port 8000 --reload")
     print("\nInteractive API documentation (Swagger UI):")
     print("   http://127.0.0.1:8000/docs")
