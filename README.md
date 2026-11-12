@@ -153,7 +153,7 @@ The following benchmark was produced by a real, automated run on the standard Wi
 ### 1. Clone & Set Up Virtual Environment
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/automl-experiment-orchestrator.git
+git clone https://github.com/HimanshuMali701/automl-experiment-orchestrator.git
 cd automl-experiment-orchestrator
 
 # Create and activate virtual environment
@@ -172,11 +172,6 @@ pip install -r requirements.txt
 ```
 
 ### 3. Configure Environment Variables
-Copy the provided `.env.example` template to `.env`:
-```bash
-cp .env.example .env
-```
-
 Key environment configuration parameters:
 ```ini
 # Networking
