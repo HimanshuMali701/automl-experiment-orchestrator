@@ -105,7 +105,22 @@ def test_api_client_submit_experiment_error():
 
 # --- Streamlit AppTest Smoke Tests ---
 
-def test_streamlit_app_initial_render():
+@pytest.fixture
+def mock_ui_backend_health():
+    """Mock backend health check to avoid socket timeouts during UI unit tests."""
+    mock_health = HealthResponse(
+        status="healthy",
+        app_name="AutoML Experiment Orchestrator",
+        version="0.1.0",
+        active_jobs=0,
+        queued_jobs=0,
+        completed_jobs=0,
+    )
+    with patch("automl.ui.client.APIClient.check_health", return_value=mock_health):
+        yield mock_health
+
+
+def test_streamlit_app_initial_render(mock_ui_backend_health):
     """Smoke test: verify Streamlit dashboard initializes without uncaught exceptions."""
     at = AppTest.from_file(APP_FILE, default_timeout=15.0)
     at.run()
@@ -117,7 +132,7 @@ def test_streamlit_app_initial_render():
     assert len(at.tabs) == 5
 
 
-def test_streamlit_app_with_validated_dataset():
+def test_streamlit_app_with_validated_dataset(mock_ui_backend_health):
     """Verify dataset profile view renders when validation_result is in session state."""
     at = AppTest.from_file(APP_FILE, default_timeout=15.0)
 
@@ -148,7 +163,7 @@ def test_streamlit_app_with_validated_dataset():
     assert "250" in metric_values or "250" in [str(m.value) for m in at.metric]
 
 
-def test_streamlit_app_with_completed_results():
+def test_streamlit_app_with_completed_results(mock_ui_backend_health):
     """Verify leaderboard and final report views render when experiment_results is in session state."""
     at = AppTest.from_file(APP_FILE, default_timeout=15.0)
 
