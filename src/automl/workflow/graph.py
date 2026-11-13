@@ -13,14 +13,16 @@ from automl.workflow.nodes import (
     create_plan_node,
     evaluate_results_node,
     execute_experiments_node,
+    fallback_plan_node,
     finalize_workflow_node,
     handle_failure_node,
     profile_data_node,
     rank_leaderboard_node,
+    repair_plan_node,
     validate_input_node,
     validate_plan_node,
 )
-from automl.workflow.registry import DatasetRegistry
+from automl.workflow.registry import DatasetRegistry, LLMRegistry
 from automl.workflow.state import (
     ErrorCategory,
     ExperimentWorkflowState,
@@ -47,10 +49,22 @@ def route_after_profiling(state: ExperimentWorkflowState) -> str:
 
 
 def route_after_plan_validation(state: ExperimentWorkflowState) -> str:
-    """Route to experiment execution if plan is valid, otherwise to failure handling."""
-    if state.get("workflow_status") == WorkflowStatus.RUNNING:
-        return "execute_experiments"
-    return "handle_failure"
+    """Route after plan validation: execute if valid, repair if retries remain, fallback if exhausted."""
+    if state.get("use_llm_planner", False):
+        val_errors = state.get("validation_errors", [])
+        if not val_errors and state.get("plan") is not None:
+            return "execute_experiments"
+
+        retry_count = state.get("plan_retry_count", 0)
+        max_retries = state.get("max_plan_retries", 2)
+        if retry_count < max_retries:
+            return "repair_plan"
+        else:
+            return "fallback_plan"
+    else:
+        if state.get("workflow_status") == WorkflowStatus.RUNNING:
+            return "execute_experiments"
+        return "handle_failure"
 
 
 def route_after_execution(state: ExperimentWorkflowState) -> str:
@@ -98,6 +112,8 @@ def create_workflow_graph(checkpointer: Optional[Any] = None) -> Any:
     workflow.add_node("profile_data", profile_data_node)
     workflow.add_node("create_plan", create_plan_node)
     workflow.add_node("validate_plan", validate_plan_node)
+    workflow.add_node("repair_plan", repair_plan_node)
+    workflow.add_node("fallback_plan", fallback_plan_node)
     workflow.add_node("execute_experiments", execute_experiments_node)
     workflow.add_node("evaluate_results", evaluate_results_node)
     workflow.add_node("handle_failure", handle_failure_node)
@@ -132,9 +148,14 @@ def create_workflow_graph(checkpointer: Optional[Any] = None) -> Any:
         route_after_plan_validation,
         {
             "execute_experiments": "execute_experiments",
+            "repair_plan": "repair_plan",
+            "fallback_plan": "fallback_plan",
             "handle_failure": "handle_failure",
         },
     )
+
+    workflow.add_edge("repair_plan", "validate_plan")
+    workflow.add_edge("fallback_plan", "execute_experiments")
 
     workflow.add_conditional_edges(
         "execute_experiments",
@@ -177,8 +198,10 @@ def run_orchestration_workflow(
     plan: Optional[ExperimentConfig] = None,
     use_llm_planner: bool = False,
     max_retries: int = 2,
+    max_plan_retries: int = 2,
     thread_id: Optional[str] = None,
     user_constraints: Optional[Dict[str, Any]] = None,
+    llm: Optional[Any] = None,
 ) -> ExperimentWorkflowState:
     """Execute end-to-end AutoML workflow with LangGraph orchestration.
 
@@ -189,14 +212,17 @@ def run_orchestration_workflow(
         plan: Optional custom experiment plan.
         use_llm_planner: Whether to use LLM planner for plan creation.
         max_retries: Maximum bounded retry count for recoverable failures.
+        max_plan_retries: Maximum bounded retry count for LLM plan reflection and repair.
         thread_id: Optional checkpointer thread ID.
         user_constraints: Optional user-specified constraints (metrics, folds, seed, test_size).
+        llm: Optional LangChain chat model instance.
 
     Returns:
         ExperimentWorkflowState: Final state containing profile, results, and trace.
     """
     graph = create_workflow_graph()
     dataset_ref = DatasetRegistry.register(dataset_source)
+    llm_ref = LLMRegistry.register(llm)
 
     initial_state: ExperimentWorkflowState = {
         "dataset_ref": dataset_ref,
@@ -208,6 +234,12 @@ def run_orchestration_workflow(
         "plan": plan,
         "plan_metadata": {},
         "use_llm_planner": use_llm_planner,
+        "validation_errors": [],
+        "plan_retry_count": 0,
+        "max_plan_retries": max_plan_retries,
+        "current_proposal": None,
+        "llm_ref": llm_ref,
+        "llm_instance": None,
         "candidate_runs": [],
         "experiment_result": None,
         "best_candidate_name": None,

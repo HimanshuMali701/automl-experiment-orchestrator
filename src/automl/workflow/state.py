@@ -64,6 +64,14 @@ class ExperimentWorkflowState(TypedDict):
     plan_metadata: Dict[str, Any]
     use_llm_planner: bool
 
+    # Phase 2: Reflection & Plan Repair
+    validation_errors: List[str]
+    plan_retry_count: int
+    max_plan_retries: int
+    current_proposal: Optional[Dict[str, Any]]
+    llm_ref: Optional[str]
+    llm_instance: Optional[Any]
+
     # Execution & results
     candidate_runs: List[CandidateRunResult]
     experiment_result: Optional[ExperimentResult]

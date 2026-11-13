@@ -8,6 +8,35 @@ import pandas as pd
 
 # Global registry storing heavy dataset payloads out of LangGraph state
 _DATA_CACHE: Dict[str, Union[pd.DataFrame, bytes, str, Path]] = {}
+_LLM_CACHE: Dict[str, Any] = {}
+
+
+class LLMRegistry:
+    """Registry for managing custom LLM references and keeping live chat models out of graph checkpoint state."""
+
+    @classmethod
+    def register(cls, model: Any) -> Optional[str]:
+        """Store custom LLM instance and return a reference token."""
+        if model is None:
+            return None
+        token = f"llm://{uuid.uuid4().hex[:12]}"
+        _LLM_CACHE[token] = model
+        return token
+
+    @classmethod
+    def resolve(cls, ref: Optional[str]) -> Any:
+        """Resolve an LLM reference token back to its underlying instance."""
+        if not ref:
+            return None
+        return _LLM_CACHE.get(ref)
+
+    @classmethod
+    def clear(cls, ref: Optional[str] = None) -> None:
+        """Clean up LLM registry entries."""
+        if ref and ref in _LLM_CACHE:
+            del _LLM_CACHE[ref]
+        elif not ref:
+            _LLM_CACHE.clear()
 
 
 class DatasetRegistry:

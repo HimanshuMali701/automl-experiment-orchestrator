@@ -8,7 +8,9 @@ from automl.planner.catalogue import (
 from automl.planner.explainer import explain_experiment_results
 from automl.planner.proposer import (
     convert_proposal_to_experiment_config,
+    generate_initial_proposal,
     propose_experiment_plan,
+    repair_experiment_plan,
     validate_experiment_proposal,
 )
 from automl.planner.provider import get_llm_provider
@@ -22,6 +24,8 @@ from automl.planner.schemas import (
 
 __all__ = [
     "propose_experiment_plan",
+    "generate_initial_proposal",
+    "repair_experiment_plan",
     "explain_experiment_results",
     "validate_experiment_proposal",
     "convert_proposal_to_experiment_config",

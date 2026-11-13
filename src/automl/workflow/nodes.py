@@ -15,14 +15,22 @@ from automl.profiler.profiler import profile_dataset
 from automl.profiler.schemas import TaskType
 from automl.profiler.validator import validate_dataset
 from automl.planner.explainer import explain_experiment_results
-from automl.planner.proposer import propose_experiment_plan
+from automl.planner.proposer import (
+    convert_proposal_to_experiment_config,
+    generate_initial_proposal,
+    propose_experiment_plan,
+    repair_experiment_plan,
+    validate_experiment_proposal,
+)
+from automl.planner.provider import get_llm_provider
+from automl.planner.schemas import LLMExperimentProposal
 from automl.trainer.engine import ExperimentEngine, build_default_experiment_config
 from automl.trainer.schemas import (
     CLASSIFICATION_METRICS,
     REGRESSION_METRICS,
     MetricName,
 )
-from automl.workflow.registry import DatasetRegistry
+from automl.workflow.registry import DatasetRegistry, LLMRegistry
 from automl.workflow.state import (
     ErrorCategory,
     ExperimentWorkflowState,
@@ -198,11 +206,62 @@ def create_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
         effective_constraints["random_seed"] = random_seed_val
 
         if state.get("use_llm_planner", False):
-            plan, plan_meta = propose_experiment_plan(
-                profile,
-                fallback_to_default=True,
+            # Check if LLM is available
+            custom_llm = LLMRegistry.resolve(state.get("llm_ref")) or state.get("llm_instance")
+            chat_model = get_llm_provider(custom_llm=custom_llm)
+            if chat_model is None:
+                # LLM unavailable -> fallback immediately (independent of LLM availability)
+                default_plan = build_default_experiment_config(
+                    profile,
+                    primary_metric=primary_metric_val,
+                    cv_folds=cv_folds_val,
+                    test_size=test_size_val,
+                    random_seed=random_seed_val,
+                )
+                if "max_models" in user_constraints and user_constraints["max_models"] is not None:
+                    max_m = user_constraints["max_models"]
+                    if len(default_plan.candidates) > max_m:
+                        default_plan.candidates = default_plan.candidates[:max_m]
+
+                plan_meta = {
+                    "source": "deterministic_fallback",
+                    "reason": "No LLM provider or credentials available.",
+                    "user_constraints_applied": bool(user_constraints),
+                }
+                trace.append("plan_attempt_1: source=fallback, outcome=valid, error_summary=none")
+                return {
+                    "plan": default_plan,
+                    "plan_metadata": plan_meta,
+                    "current_proposal": None,
+                    "validation_errors": [],
+                    "plan_retry_count": 0,
+                    "execution_trace": trace,
+                }
+
+            # Generate initial proposal via LLM
+            proposal, err_msg = generate_initial_proposal(
+                profile=profile,
+                llm=chat_model,
                 user_constraints=effective_constraints,
             )
+
+            if proposal is not None:
+                current_proposal = proposal.model_dump()
+                return {
+                    "current_proposal": current_proposal,
+                    "plan": None,
+                    "plan_retry_count": 0,
+                    "validation_errors": [],
+                    "execution_trace": trace,
+                }
+            else:
+                return {
+                    "current_proposal": None,
+                    "plan": None,
+                    "plan_retry_count": 0,
+                    "validation_errors": [f"[schema_error] Initial proposal generation failed: {err_msg}"],
+                    "execution_trace": trace,
+                }
         else:
             plan = build_default_experiment_config(
                 profile,
@@ -216,16 +275,19 @@ def create_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
                 "user_constraints_applied": bool(user_constraints),
             }
 
-        if "max_models" in user_constraints and user_constraints["max_models"] is not None:
-            max_m = user_constraints["max_models"]
-            if len(plan.candidates) > max_m:
-                plan.candidates = plan.candidates[:max_m]
+            if "max_models" in user_constraints and user_constraints["max_models"] is not None:
+                max_m = user_constraints["max_models"]
+                if len(plan.candidates) > max_m:
+                    plan.candidates = plan.candidates[:max_m]
 
-        return {
-            "plan": plan,
-            "plan_metadata": plan_meta,
-            "execution_trace": trace,
-        }
+            return {
+                "plan": plan,
+                "plan_metadata": plan_meta,
+                "current_proposal": None,
+                "validation_errors": [],
+                "plan_retry_count": 0,
+                "execution_trace": trace,
+            }
     except Exception as e:
         logger.warning(f"create_plan failed: {str(e)}")
         return {
@@ -248,23 +310,91 @@ def validate_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
             "execution_trace": trace,
         }
 
-    plan = state.get("plan")
     profile = state.get("profile")
-
-    if plan is None:
-        return {
-            "workflow_status": WorkflowStatus.FAILED,
-            "error_category": ErrorCategory.INVALID_PLAN,
-            "error_message": state.get("error_message") or "Experiment plan is missing.",
-            "is_recoverable": False,
-            "execution_trace": trace,
-        }
-
     if profile is None or profile.target_profile is None:
         return {
             "workflow_status": WorkflowStatus.FAILED,
             "error_category": ErrorCategory.INVALID_DATA,
             "error_message": "Dataset profile or target profile is missing.",
+            "is_recoverable": False,
+            "execution_trace": trace,
+        }
+
+    user_constraints = state.get("user_constraints") or {}
+    cv_folds_val = user_constraints.get("cv_folds") if user_constraints.get("cv_folds") is not None else 5
+    test_size_val = user_constraints.get("test_size") if user_constraints.get("test_size") is not None else 0.2
+    random_seed_val = user_constraints.get("random_seed") if user_constraints.get("random_seed") is not None else 42
+
+    # Check if we are validating an in-flight LLM proposal
+    if state.get("use_llm_planner", False) and state.get("plan") is None:
+        attempt_num = state.get("plan_retry_count", 0) + 1
+        curr_prop_dict = state.get("current_proposal")
+
+        if curr_prop_dict is not None:
+            try:
+                proposal_obj = LLMExperimentProposal.model_validate(curr_prop_dict)
+                val_result = validate_experiment_proposal(proposal_obj, profile)
+
+                if val_result.is_valid:
+                    # Successfully validated! Convert to ExperimentConfig
+                    plan_cfg = convert_proposal_to_experiment_config(
+                        proposal_obj,
+                        profile,
+                        test_size=test_size_val,
+                        cv_folds=cv_folds_val,
+                        random_seed=random_seed_val,
+                        user_constraints=user_constraints,
+                    )
+                    trace.append(f"plan_attempt_{attempt_num}: source=llm, outcome=valid, error_summary=none")
+                    plan_meta = {
+                        "source": "llm",
+                        "rationale": proposal_obj.rationale,
+                        "data_hygiene_observations": proposal_obj.data_hygiene_observations,
+                        "warnings": val_result.warnings,
+                        "user_constraints_applied": bool(user_constraints),
+                        "plan_retry_count": state.get("plan_retry_count", 0),
+                    }
+                    return {
+                        "plan": plan_cfg,
+                        "plan_metadata": plan_meta,
+                        "validation_errors": [],
+                        "workflow_status": WorkflowStatus.RUNNING,
+                        "execution_trace": trace,
+                    }
+                else:
+                    # Invalid proposal
+                    err_summary = "; ".join(val_result.errors)
+                    trace.append(f"plan_attempt_{attempt_num}: source=llm, outcome=invalid, error_summary={err_summary}")
+                    return {
+                        "validation_errors": val_result.errors,
+                        "workflow_status": WorkflowStatus.PLANNING,
+                        "execution_trace": trace,
+                    }
+            except Exception as e:
+                err_summary = f"[schema_error] Proposal parsing/validation error: {str(e)}"
+                trace.append(f"plan_attempt_{attempt_num}: source=llm, outcome=invalid, error_summary={err_summary}")
+                return {
+                    "validation_errors": [err_summary],
+                    "workflow_status": WorkflowStatus.PLANNING,
+                    "execution_trace": trace,
+                }
+        else:
+            # Proposal generation or parsing failed
+            errors = state.get("validation_errors") or ["[schema_error] Proposal is missing or unparseable."]
+            err_summary = "; ".join(errors)
+            trace.append(f"plan_attempt_{attempt_num}: source=llm, outcome=invalid, error_summary={err_summary}")
+            return {
+                "validation_errors": errors,
+                "workflow_status": WorkflowStatus.PLANNING,
+                "execution_trace": trace,
+            }
+
+    plan = state.get("plan")
+    if plan is None:
+        return {
+            "workflow_status": WorkflowStatus.FAILED,
+            "error_category": ErrorCategory.INVALID_PLAN,
+            "error_message": state.get("error_message") or "Experiment plan is missing.",
             "is_recoverable": False,
             "execution_trace": trace,
         }
@@ -348,6 +478,91 @@ def validate_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
         }
 
     return {
+        "workflow_status": WorkflowStatus.RUNNING,
+        "execution_trace": trace,
+    }
+
+
+def repair_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
+    """Node: Prompt LLM to reflect and repair invalid experiment proposal using error feedback."""
+    trace = list(state.get("execution_trace", []))
+    trace.append("repair_plan")
+    logger.info("Executing node: repair_plan")
+
+    profile = state.get("profile")
+    user_constraints = state.get("user_constraints") or {}
+    prev_errors = state.get("validation_errors", [])
+    current_retry = state.get("plan_retry_count", 0) + 1
+
+    custom_llm = LLMRegistry.resolve(state.get("llm_ref")) or state.get("llm_instance")
+    chat_model = get_llm_provider(custom_llm=custom_llm)
+    repaired_proposal, repair_err = repair_experiment_plan(
+        profile=profile,
+        previous_proposal=state.get("current_proposal"),
+        validation_errors=prev_errors,
+        llm=chat_model,
+        user_constraints=user_constraints,
+    )
+
+    if repaired_proposal is not None:
+        return {
+            "current_proposal": repaired_proposal.model_dump(),
+            "plan_retry_count": current_retry,
+            "validation_errors": [],
+            "execution_trace": trace,
+        }
+    else:
+        return {
+            "current_proposal": None,
+            "validation_errors": [f"[schema_error] Plan repair failed: {repair_err}"],
+            "plan_retry_count": current_retry,
+            "execution_trace": trace,
+        }
+
+
+def fallback_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
+    """Node: Produce safe deterministic default plan after reflection retries are exhausted."""
+    trace = list(state.get("execution_trace", []))
+    trace.append("fallback_plan")
+    logger.info("Executing node: fallback_plan")
+
+    profile = state.get("profile")
+    user_constraints = state.get("user_constraints") or {}
+
+    primary_metric_val = user_constraints.get("primary_metric")
+    if isinstance(primary_metric_val, str):
+        primary_metric_val = MetricName(primary_metric_val.lower())
+    cv_folds_val = user_constraints.get("cv_folds") if user_constraints.get("cv_folds") is not None else 5
+    test_size_val = user_constraints.get("test_size") if user_constraints.get("test_size") is not None else 0.2
+    random_seed_val = user_constraints.get("random_seed") if user_constraints.get("random_seed") is not None else 42
+
+    default_plan = build_default_experiment_config(
+        profile,
+        primary_metric=primary_metric_val,
+        cv_folds=cv_folds_val,
+        test_size=test_size_val,
+        random_seed=random_seed_val,
+    )
+    if "max_models" in user_constraints and user_constraints["max_models"] is not None:
+        max_m = user_constraints["max_models"]
+        if len(default_plan.candidates) > max_m:
+            default_plan.candidates = default_plan.candidates[:max_m]
+
+    attempt_num = state.get("plan_retry_count", 0) + 1
+    trace.append(f"plan_attempt_{attempt_num}: source=fallback, outcome=valid, error_summary=none")
+
+    plan_meta = {
+        "source": "deterministic_fallback",
+        "reason": f"Plan retries exhausted ({state.get('plan_retry_count', 0)} attempts failed validation).",
+        "validation_errors": state.get("validation_errors", []),
+        "user_constraints_applied": bool(user_constraints),
+        "plan_retry_count": state.get("plan_retry_count", 0),
+    }
+
+    return {
+        "plan": default_plan,
+        "plan_metadata": plan_meta,
+        "validation_errors": [],
         "workflow_status": WorkflowStatus.RUNNING,
         "execution_trace": trace,
     }

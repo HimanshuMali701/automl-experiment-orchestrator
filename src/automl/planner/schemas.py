@@ -76,6 +76,7 @@ class PlanValidationResult(BaseModel):
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     validated_proposal: Optional[LLMExperimentProposal] = None
+    error_categories: List[str] = Field(default_factory=list)
 
 
 class ExperimentExplanation(BaseModel):
