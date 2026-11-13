@@ -55,6 +55,8 @@ class ExperimentJobResponse(BaseModel):
     error_message: Optional[str] = Field(default=None, description="Sanitized failure description if failed.")
     status_url: str = Field(..., description="URL to poll for job progress.")
     results_url: str = Field(..., description="URL to retrieve results once completed.")
+    user_constraints: Optional[Dict[str, Any]] = Field(default=None, description="User-specified experiment constraints.")
+    effective_config: Optional[Dict[str, Any]] = Field(default=None, description="Effective parameters applied during execution.")
 
 
 class CandidateSummaryResponse(BaseModel):
@@ -87,6 +89,7 @@ class ExperimentResultResponse(BaseModel):
     leaderboard: List[CandidateSummaryResponse] = Field(default_factory=list, description="Ranked model leaderboard.")
     result_explanation: Optional[Dict[str, Any]] = Field(default=None, description="Structured explanation.")
     warnings: List[str] = Field(default_factory=list, description="Execution or data warnings.")
+    effective_config: Optional[Dict[str, Any]] = Field(default=None, description="Effective parameters applied during execution.")
 
 
 class ErrorResponse(BaseModel):

@@ -40,6 +40,8 @@ class JobRecord(BaseModel):
     error_message: Optional[str] = None
     result: Optional[ExperimentResultResponse] = None
     use_llm_planner: bool = False
+    user_constraints: Optional[Dict[str, Any]] = None
+    effective_config: Optional[Dict[str, Any]] = None
 
 
 class JobManager:
@@ -121,6 +123,14 @@ class JobManager:
             experiment_id = str(uuid.uuid4())
             now_str = datetime.now(timezone.utc).isoformat()
 
+            raw_constraints = {
+                "primary_metric": primary_metric.value if primary_metric else None,
+                "cv_folds": cv_folds,
+                "test_size": test_size,
+                "random_seed": random_seed,
+            }
+            initial_user_constraints = {k: v for k, v in raw_constraints.items() if v is not None}
+
             job = JobRecord(
                 experiment_id=experiment_id,
                 status=JobStatus.QUEUED,
@@ -128,6 +138,7 @@ class JobManager:
                 task_type=task_type_override.value if task_type_override else None,
                 created_at=now_str,
                 use_llm_planner=use_llm_planner,
+                user_constraints=initial_user_constraints,
             )
             self._jobs[experiment_id] = job
             self._persist_job(job)
@@ -162,6 +173,13 @@ class JobManager:
         random_seed: int,
     ) -> None:
         """Worker executing workflow in background thread."""
+        user_constraints: Dict[str, Any] = {
+            "primary_metric": primary_metric,
+            "cv_folds": cv_folds,
+            "test_size": test_size,
+            "random_seed": random_seed,
+        }
+
         with self._lock:
             job = self._jobs[experiment_id]
             job.status = JobStatus.RUNNING
@@ -177,6 +195,7 @@ class JobManager:
                 target_column=target_column,
                 task_type_override=task_type_override,
                 use_llm_planner=use_llm_planner,
+                user_constraints=user_constraints,
             )
 
             end_time = datetime.now(timezone.utc)
@@ -186,6 +205,15 @@ class JobManager:
                 job = self._jobs[experiment_id]
                 job.completed_at = end_time.isoformat()
                 job.execution_time_seconds = round(duration, 3)
+
+                plan = final_state.get("plan")
+                if plan:
+                    job.effective_config = {
+                        "primary_metric": plan.primary_metric.value if hasattr(plan.primary_metric, "value") else str(plan.primary_metric),
+                        "cv_folds": plan.cv_folds,
+                        "test_size": plan.test_size,
+                        "random_seed": plan.random_seed,
+                    }
 
                 if final_state["workflow_status"] == WorkflowStatus.SUCCESS:
                     exp_res = final_state.get("experiment_result")
@@ -255,6 +283,7 @@ class JobManager:
                             leaderboard=leaderboard_summaries,
                             result_explanation=explanation_dict,
                             warnings=exp_res.warnings,
+                            effective_config=job.effective_config,
                         )
                         job.task_type = task_key
 

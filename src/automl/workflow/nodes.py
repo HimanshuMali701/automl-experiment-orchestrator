@@ -1,6 +1,6 @@
 """Graph node implementations for validation, profiling, planning, execution, and error handling."""
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Union
 import pandas as pd
 
 from automl.core.exceptions import (
@@ -12,10 +12,16 @@ from automl.core.exceptions import (
 from automl.core.logging import get_logger
 from automl.profiler.loader import load_dataset
 from automl.profiler.profiler import profile_dataset
+from automl.profiler.schemas import TaskType
 from automl.profiler.validator import validate_dataset
 from automl.planner.explainer import explain_experiment_results
 from automl.planner.proposer import propose_experiment_plan
 from automl.trainer.engine import ExperimentEngine, build_default_experiment_config
+from automl.trainer.schemas import (
+    CLASSIFICATION_METRICS,
+    REGRESSION_METRICS,
+    MetricName,
+)
 from automl.workflow.registry import DatasetRegistry
 from automl.workflow.state import (
     ErrorCategory,
@@ -97,6 +103,59 @@ def profile_data_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
         }
 
 
+def validate_user_constraints(
+    constraints: Dict[str, Any],
+    task_type: Optional[TaskType] = None,
+) -> None:
+    """Validate user constraints against boundaries and detected task type."""
+    if not constraints:
+        return
+
+    # 1. cv_folds
+    if "cv_folds" in constraints and constraints["cv_folds"] is not None:
+        cv_folds = constraints["cv_folds"]
+        if not isinstance(cv_folds, int) or isinstance(cv_folds, bool) or not (2 <= cv_folds <= 10):
+            raise ExperimentPlanError(f"User constraint 'cv_folds' must be an integer between 2 and 10 (got {cv_folds}).")
+
+    # 2. test_size
+    if "test_size" in constraints and constraints["test_size"] is not None:
+        test_size = constraints["test_size"]
+        if not isinstance(test_size, (int, float)) or isinstance(test_size, bool) or not (0.05 <= test_size <= 0.50):
+            raise ExperimentPlanError(f"User constraint 'test_size' must be between 0.05 and 0.50 (got {test_size}).")
+
+    # 3. random_seed
+    if "random_seed" in constraints and constraints["random_seed"] is not None:
+        random_seed = constraints["random_seed"]
+        if not isinstance(random_seed, int) or isinstance(random_seed, bool):
+            raise ExperimentPlanError(f"User constraint 'random_seed' must be an integer (got {random_seed}).")
+
+    # 4. primary_metric
+    if "primary_metric" in constraints and constraints["primary_metric"] is not None:
+        metric = constraints["primary_metric"]
+        if isinstance(metric, str):
+            try:
+                metric = MetricName(metric.lower())
+            except ValueError:
+                valid_metrics = [m.value for m in MetricName]
+                raise ExperimentPlanError(
+                    f"User constraint primary_metric '{metric}' is invalid. Allowed metrics: {valid_metrics}"
+                )
+
+        if task_type is not None:
+            if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
+                if metric not in CLASSIFICATION_METRICS:
+                    raise ExperimentPlanError(
+                        f"User constraint primary_metric '{metric.value}' is incompatible with classification task. "
+                        f"Allowed metrics: {[m.value for m in CLASSIFICATION_METRICS]}"
+                    )
+            elif task_type == TaskType.REGRESSION:
+                if metric not in REGRESSION_METRICS:
+                    raise ExperimentPlanError(
+                        f"User constraint primary_metric '{metric.value}' is incompatible with regression task. "
+                        f"Allowed metrics: {[m.value for m in REGRESSION_METRICS]}"
+                    )
+
+
 def create_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
     """Node: Generate experiment plan (via LLM planner if requested, else deterministic baseline)."""
     trace = list(state.get("execution_trace", []))
@@ -113,14 +172,54 @@ def create_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
             }
 
         profile = state.get("profile")
-        if profile is None:
-            raise ExperimentPlanError("Cannot create plan: dataset profile is missing.")
+        if profile is None or profile.target_profile is None:
+            raise ExperimentPlanError("Cannot create plan: dataset profile or target profile is missing.")
+
+        task_type = profile.target_profile.detected_task_type
+        user_constraints = state.get("user_constraints") or {}
+
+        # Validate user constraints against detected task and parameter bounds
+        validate_user_constraints(user_constraints, task_type=task_type)
+
+        primary_metric_val = user_constraints.get("primary_metric")
+        if isinstance(primary_metric_val, str):
+            primary_metric_val = MetricName(primary_metric_val.lower())
+
+        cv_folds_val = user_constraints.get("cv_folds") if user_constraints.get("cv_folds") is not None else 5
+        test_size_val = user_constraints.get("test_size") if user_constraints.get("test_size") is not None else 0.2
+        random_seed_val = user_constraints.get("random_seed") if user_constraints.get("random_seed") is not None else 42
+
+        # Effective constraints dict to pass downstream
+        effective_constraints = dict(user_constraints)
+        if primary_metric_val:
+            effective_constraints["primary_metric"] = primary_metric_val
+        effective_constraints["cv_folds"] = cv_folds_val
+        effective_constraints["test_size"] = test_size_val
+        effective_constraints["random_seed"] = random_seed_val
 
         if state.get("use_llm_planner", False):
-            plan, plan_meta = propose_experiment_plan(profile, fallback_to_default=True)
+            plan, plan_meta = propose_experiment_plan(
+                profile,
+                fallback_to_default=True,
+                user_constraints=effective_constraints,
+            )
         else:
-            plan = build_default_experiment_config(profile)
-            plan_meta = {"source": "deterministic"}
+            plan = build_default_experiment_config(
+                profile,
+                primary_metric=primary_metric_val,
+                cv_folds=cv_folds_val,
+                test_size=test_size_val,
+                random_seed=random_seed_val,
+            )
+            plan_meta = {
+                "source": "deterministic",
+                "user_constraints_applied": bool(user_constraints),
+            }
+
+        if "max_models" in user_constraints and user_constraints["max_models"] is not None:
+            max_m = user_constraints["max_models"]
+            if len(plan.candidates) > max_m:
+                plan.candidates = plan.candidates[:max_m]
 
         return {
             "plan": plan,
@@ -144,6 +243,11 @@ def validate_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
     trace.append("validate_plan")
     logger.info("Executing node: validate_plan")
 
+    if state.get("workflow_status") == WorkflowStatus.FAILED:
+        return {
+            "execution_trace": trace,
+        }
+
     plan = state.get("plan")
     profile = state.get("profile")
 
@@ -151,7 +255,7 @@ def validate_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
         return {
             "workflow_status": WorkflowStatus.FAILED,
             "error_category": ErrorCategory.INVALID_PLAN,
-            "error_message": "Experiment plan is missing.",
+            "error_message": state.get("error_message") or "Experiment plan is missing.",
             "is_recoverable": False,
             "execution_trace": trace,
         }
@@ -165,15 +269,71 @@ def validate_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
             "execution_trace": trace,
         }
 
+    detected_task = profile.target_profile.detected_task_type
+
     # Verify task type alignment
-    if plan.task_type != profile.target_profile.detected_task_type:
+    if plan.task_type != detected_task:
         return {
             "workflow_status": WorkflowStatus.FAILED,
             "error_category": ErrorCategory.INVALID_PLAN,
             "error_message": (
                 f"Plan task_type '{plan.task_type}' does not match detected task_type "
-                f"'{profile.target_profile.detected_task_type}'."
+                f"'{detected_task}'."
             ),
+            "is_recoverable": False,
+            "execution_trace": trace,
+        }
+
+    # Verify primary metric compatibility with detected task
+    if detected_task in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
+        if plan.primary_metric not in CLASSIFICATION_METRICS:
+            return {
+                "workflow_status": WorkflowStatus.FAILED,
+                "error_category": ErrorCategory.INVALID_PLAN,
+                "error_message": (
+                    f"Plan primary_metric '{plan.primary_metric.value}' is invalid for classification task. "
+                    f"Allowed metrics: {[m.value for m in CLASSIFICATION_METRICS]}"
+                ),
+                "is_recoverable": False,
+                "execution_trace": trace,
+            }
+    elif detected_task == TaskType.REGRESSION:
+        if plan.primary_metric not in REGRESSION_METRICS:
+            return {
+                "workflow_status": WorkflowStatus.FAILED,
+                "error_category": ErrorCategory.INVALID_PLAN,
+                "error_message": (
+                    f"Plan primary_metric '{plan.primary_metric.value}' is invalid for regression task. "
+                    f"Allowed metrics: {[m.value for m in REGRESSION_METRICS]}"
+                ),
+                "is_recoverable": False,
+                "execution_trace": trace,
+            }
+
+    # Verify bounds: cv_folds, test_size, random_seed
+    if not (2 <= plan.cv_folds <= 10):
+        return {
+            "workflow_status": WorkflowStatus.FAILED,
+            "error_category": ErrorCategory.INVALID_PLAN,
+            "error_message": f"cv_folds must be between 2 and 10 (got {plan.cv_folds}).",
+            "is_recoverable": False,
+            "execution_trace": trace,
+        }
+
+    if not (0.05 <= plan.test_size <= 0.50):
+        return {
+            "workflow_status": WorkflowStatus.FAILED,
+            "error_category": ErrorCategory.INVALID_PLAN,
+            "error_message": f"test_size must be between 0.05 and 0.50 (got {plan.test_size}).",
+            "is_recoverable": False,
+            "execution_trace": trace,
+        }
+
+    if not isinstance(plan.random_seed, int) or isinstance(plan.random_seed, bool):
+        return {
+            "workflow_status": WorkflowStatus.FAILED,
+            "error_category": ErrorCategory.INVALID_PLAN,
+            "error_message": f"random_seed must be an integer (got {type(plan.random_seed).__name__}).",
             "is_recoverable": False,
             "execution_trace": trace,
         }

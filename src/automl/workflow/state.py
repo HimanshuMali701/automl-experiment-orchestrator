@@ -1,7 +1,7 @@
 """Shared typed state definitions and error classifications for LangGraph workflow."""
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from typing_extensions import TypedDict
 
 from automl.profiler.schemas import DatasetProfile, TaskType
@@ -9,6 +9,7 @@ from automl.trainer.schemas import (
     CandidateRunResult,
     ExperimentConfig,
     ExperimentResult,
+    MetricName,
 )
 
 
@@ -33,6 +34,15 @@ class ErrorCategory(str, Enum):
     FATAL_RUNTIME = "fatal_runtime"
 
 
+class UserConstraints(TypedDict, total=False):
+    """User-specified constraints and overrides for experiment planning and training."""
+    primary_metric: Optional[Union[MetricName, str]]
+    cv_folds: Optional[int]
+    test_size: Optional[float]
+    random_seed: Optional[int]
+    max_models: Optional[int]
+
+
 class ExperimentWorkflowState(TypedDict):
     """Shared state container passed between LangGraph nodes.
 
@@ -44,6 +54,9 @@ class ExperimentWorkflowState(TypedDict):
     target_column: Optional[str]
     task_type_override: Optional[TaskType]
     dataset_metadata: Dict[str, Any]
+
+    # User-specified constraints & overrides
+    user_constraints: Optional[Dict[str, Any]]
 
     # Analysis & planning artifacts
     profile: Optional[DatasetProfile]

@@ -178,6 +178,7 @@ def run_orchestration_workflow(
     use_llm_planner: bool = False,
     max_retries: int = 2,
     thread_id: Optional[str] = None,
+    user_constraints: Optional[Dict[str, Any]] = None,
 ) -> ExperimentWorkflowState:
     """Execute end-to-end AutoML workflow with LangGraph orchestration.
 
@@ -189,6 +190,7 @@ def run_orchestration_workflow(
         use_llm_planner: Whether to use LLM planner for plan creation.
         max_retries: Maximum bounded retry count for recoverable failures.
         thread_id: Optional checkpointer thread ID.
+        user_constraints: Optional user-specified constraints (metrics, folds, seed, test_size).
 
     Returns:
         ExperimentWorkflowState: Final state containing profile, results, and trace.
@@ -201,6 +203,7 @@ def run_orchestration_workflow(
         "target_column": target_column,
         "task_type_override": task_type_override,
         "dataset_metadata": {},
+        "user_constraints": user_constraints or {},
         "profile": None,
         "plan": plan,
         "plan_metadata": {},

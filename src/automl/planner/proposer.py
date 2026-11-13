@@ -26,6 +26,7 @@ from automl.trainer.schemas import (
     REGRESSION_METRICS,
     REGRESSION_MODELS,
     ExperimentConfig,
+    MetricName,
     ModelCandidateConfig,
     ModelFamily,
     PreprocessingConfig,
@@ -126,10 +127,33 @@ def convert_proposal_to_experiment_config(
     test_size: float = 0.2,
     cv_folds: int = 5,
     random_seed: int = 42,
+    user_constraints: Optional[Dict[str, Any]] = None,
 ) -> ExperimentConfig:
-    """Convert a validated LLM proposal into a standard ExperimentConfig for the ML engine."""
+    """Convert a validated LLM proposal into a standard ExperimentConfig for the ML engine.
+
+    Enforces strict user constraint precedence: explicit user constraints override
+    LLM-proposed parameters.
+    """
     target_name = profile.target_profile.name
     task_type = profile.target_profile.detected_task_type
+
+    constraints = user_constraints or {}
+
+    # Strict precedence for primary metric: user constraint > LLM proposal
+    effective_metric = proposal.primary_metric
+    if constraints.get("primary_metric"):
+        user_metric = constraints["primary_metric"]
+        if isinstance(user_metric, str):
+            user_metric = MetricName(user_metric.lower())
+        effective_metric = user_metric
+
+    # Clean secondary metrics to avoid duplication with primary metric
+    secondary_metrics = [m for m in proposal.secondary_metrics if m != effective_metric]
+
+    # Precedence for CV folds, test size, and seed
+    effective_cv_folds = constraints.get("cv_folds") if constraints.get("cv_folds") is not None else cv_folds
+    effective_test_size = constraints.get("test_size") if constraints.get("test_size") is not None else test_size
+    effective_random_seed = constraints.get("random_seed") if constraints.get("random_seed") is not None else random_seed
 
     candidates: List[ModelCandidateConfig] = []
     has_baseline = False
@@ -173,6 +197,12 @@ def convert_proposal_to_experiment_config(
                 ),
             )
 
+    # Respect max_models constraint if provided
+    if "max_models" in constraints and constraints["max_models"] is not None:
+        max_m = constraints["max_models"]
+        if len(candidates) > max_m:
+            candidates = candidates[:max_m]
+
     preprocessing = PreprocessingConfig(
         numeric_imputer=proposal.preprocessing.numeric_imputer,
         categorical_imputer=proposal.preprocessing.categorical_imputer,
@@ -182,11 +212,11 @@ def convert_proposal_to_experiment_config(
     return ExperimentConfig(
         target_column=target_name,
         task_type=task_type,
-        primary_metric=proposal.primary_metric,
-        secondary_metrics=proposal.secondary_metrics,
-        test_size=test_size,
-        cv_folds=cv_folds,
-        random_seed=random_seed,
+        primary_metric=effective_metric,
+        secondary_metrics=secondary_metrics,
+        test_size=effective_test_size,
+        cv_folds=effective_cv_folds,
+        random_seed=effective_random_seed,
         candidates=candidates,
         preprocessing=preprocessing,
     )
@@ -197,6 +227,7 @@ def propose_experiment_plan(
     llm: Optional[Any] = None,
     settings: Optional[Settings] = None,
     fallback_to_default: bool = True,
+    user_constraints: Optional[Dict[str, Any]] = None,
 ) -> Tuple[ExperimentConfig, Dict[str, Any]]:
     """Propose an experiment plan using an LLM with strict validation and deterministic fallback.
 
@@ -205,6 +236,7 @@ def propose_experiment_plan(
         llm: Optional LangChain chat model instance.
         settings: Application settings.
         fallback_to_default: Whether to fall back to the deterministic plan upon any error.
+        user_constraints: Optional user constraints dict (primary_metric, cv_folds, test_size, random_seed).
 
     Returns:
         Tuple[ExperimentConfig, Dict[str, Any]]: Validated experiment plan and metadata.
@@ -212,23 +244,62 @@ def propose_experiment_plan(
     if profile.target_profile is None:
         raise ExperimentPlanError("Cannot generate plan: target profile is missing.")
 
+    constraints = user_constraints or {}
+    p_metric = constraints.get("primary_metric")
+    if isinstance(p_metric, str):
+        p_metric = MetricName(p_metric.lower())
+    c_folds = constraints.get("cv_folds") if constraints.get("cv_folds") is not None else 5
+    t_size = constraints.get("test_size") if constraints.get("test_size") is not None else 0.2
+    r_seed = constraints.get("random_seed") if constraints.get("random_seed") is not None else 42
+
+    def _get_fallback_plan(reason: str, rejected: Optional[Dict[str, Any]] = None, errors: Optional[List[str]] = None) -> Tuple[ExperimentConfig, Dict[str, Any]]:
+        default_plan = build_default_experiment_config(
+            profile,
+            primary_metric=p_metric,
+            cv_folds=c_folds,
+            test_size=t_size,
+            random_seed=r_seed,
+        )
+        if "max_models" in constraints and constraints["max_models"] is not None:
+            default_plan.candidates = default_plan.candidates[:constraints["max_models"]]
+
+        meta: Dict[str, Any] = {
+            "source": "deterministic_fallback",
+            "reason": reason,
+            "rationale": "Fallback to deterministic defaults based on dataset profile and user constraints.",
+            "user_constraints_applied": bool(constraints),
+        }
+        if rejected:
+            meta["rejected_proposal"] = rejected
+        if errors:
+            meta["validation_errors"] = errors
+        return default_plan, meta
+
     chat_model = get_llm_provider(settings=settings, custom_llm=llm)
 
     # 1. Fallback if no LLM provider or credentials available
     if chat_model is None:
         logger.info("LLM provider unavailable; falling back to deterministic plan.")
-        default_plan = build_default_experiment_config(profile)
-        metadata = {
-            "source": "deterministic_fallback",
-            "reason": "No LLM provider or credentials available.",
-            "rationale": "Generated via deterministic heuristics based on dataset profile.",
-        }
-        return default_plan, metadata
+        return _get_fallback_plan(reason="No LLM provider or credentials available.")
 
     # 2. Build structured prompt and parser
     task_type = profile.target_profile.detected_task_type
     catalogue_desc = get_supported_catalogue_description(task_type)
     compact_profile = format_compact_profile(profile)
+
+    constraints_instruction = ""
+    if constraints:
+        c_lines = []
+        if p_metric:
+            c_lines.append(f"Required primary evaluation metric: {p_metric.value}")
+        if c_folds:
+            c_lines.append(f"Number of CV folds: {c_folds}")
+        if t_size:
+            c_lines.append(f"Held-out test split fraction: {t_size}")
+        if r_seed:
+            c_lines.append(f"Random seed: {r_seed}")
+        if c_lines:
+            constraints_instruction = "\nUser Constraints (Mandatory):\n" + "\n".join(f"- {l}" for l in c_lines) + "\n"
 
     parser = PydanticOutputParser(pydantic_object=LLMExperimentProposal)
 
@@ -236,9 +307,10 @@ def propose_experiment_plan(
         ("system", PLANNER_SYSTEM_PROMPT),
         (
             "human",
-            "Review the dataset profile and model catalogue below, then propose a controlled experiment plan.\n\n"
+            "Review the dataset profile, model catalogue, and any user constraints below, then propose a controlled experiment plan.\n\n"
             "{catalogue_desc}\n\n"
-            "{compact_profile}\n\n"
+            "{compact_profile}\n"
+            "{constraints_instruction}\n"
             "{format_instructions}\n"
         ),
     ])
@@ -246,6 +318,7 @@ def propose_experiment_plan(
     formatted_prompt = prompt.format_prompt(
         catalogue_desc=catalogue_desc,
         compact_profile=compact_profile,
+        constraints_instruction=constraints_instruction,
         format_instructions=parser.get_format_instructions(),
     )
 
@@ -258,37 +331,44 @@ def propose_experiment_plan(
     except Exception as e:
         logger.warning(f"LLM plan generation or parsing failed: {str(e)}")
         if fallback_to_default:
-            default_plan = build_default_experiment_config(profile)
-            return default_plan, {
-                "source": "deterministic_fallback",
-                "reason": f"LLM invocation or schema parsing error: {str(e)}",
-                "rationale": "Fallback to deterministic defaults due to LLM parsing error.",
-            }
+            return _get_fallback_plan(reason=f"LLM invocation or schema parsing error: {str(e)}")
         raise ExperimentPlanError(f"LLM plan generation failed: {str(e)}") from e
 
-    # 4. Strict allowlist and constraint validation
+    # 4. Strict user constraint precedence: override proposal with explicit user constraints
+    if p_metric:
+        parsed_proposal.primary_metric = p_metric
+        parsed_proposal.secondary_metrics = [
+            m for m in parsed_proposal.secondary_metrics if m != p_metric
+        ]
+
+    # 5. Strict allowlist and constraint validation
     validation_res = validate_experiment_proposal(parsed_proposal, profile)
 
     if not validation_res.is_valid:
         logger.warning(f"LLM proposed invalid plan: {validation_res.errors}")
         if fallback_to_default:
-            default_plan = build_default_experiment_config(profile)
-            return default_plan, {
-                "source": "deterministic_fallback",
-                "reason": f"Plan rejected due to constraint violations: {validation_res.errors}",
-                "rejected_proposal": parsed_proposal.model_dump(),
-                "validation_errors": validation_res.errors,
-                "rationale": "Fallback to deterministic defaults following plan rejection.",
-            }
+            return _get_fallback_plan(
+                reason=f"Plan rejected due to constraint violations: {validation_res.errors}",
+                rejected=parsed_proposal.model_dump(),
+                errors=validation_res.errors,
+            )
         raise ExperimentPlanError(f"LLM plan rejected: {validation_res.errors}")
 
-    # 5. Convert to valid ExperimentConfig
-    config = convert_proposal_to_experiment_config(parsed_proposal, profile)
+    # 6. Convert to valid ExperimentConfig with user constraints
+    config = convert_proposal_to_experiment_config(
+        parsed_proposal,
+        profile,
+        test_size=t_size,
+        cv_folds=c_folds,
+        random_seed=r_seed,
+        user_constraints=constraints,
+    )
     metadata = {
         "source": "llm",
         "rationale": parsed_proposal.rationale,
         "data_hygiene_observations": parsed_proposal.data_hygiene_observations,
         "warnings": validation_res.warnings,
+        "user_constraints_applied": bool(constraints),
     }
     return config, metadata
 

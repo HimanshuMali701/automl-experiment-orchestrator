@@ -293,6 +293,8 @@ async def create_experiment(
         error_message=job.error_message,
         status_url=status_url,
         results_url=results_url,
+        user_constraints=job.user_constraints,
+        effective_config=job.effective_config,
     )
 
 
@@ -331,6 +333,8 @@ def get_experiment_status(experiment_id: str, request: Request) -> ExperimentJob
         error_message=job.error_message,
         status_url=status_url,
         results_url=results_url,
+        user_constraints=job.user_constraints,
+        effective_config=job.effective_config,
     )
 
 
