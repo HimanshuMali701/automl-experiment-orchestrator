@@ -11,6 +11,7 @@ from automl.profiler.schemas import TaskType
 from automl.trainer.schemas import ExperimentConfig
 from automl.workflow.nodes import (
     create_plan_node,
+    diagnose_failure_node,
     evaluate_results_node,
     execute_experiments_node,
     fallback_plan_node,
@@ -68,22 +69,35 @@ def route_after_plan_validation(state: ExperimentWorkflowState) -> str:
 
 
 def route_after_execution(state: ExperimentWorkflowState) -> str:
-    """Route to evaluation if execution produced results, otherwise to failure handling."""
+    """Route to evaluation if execution produced results, otherwise to failure diagnosis."""
     if state.get("workflow_status") == WorkflowStatus.EVALUATING:
         return "evaluate_results"
-    return "handle_failure"
+    return "diagnose_failure"
 
 
 def route_after_evaluation(state: ExperimentWorkflowState) -> str:
-    """Route to ranking if models succeeded (full or partial), otherwise to failure handling."""
+    """Route to ranking if models succeeded (full or partial), otherwise to failure diagnosis."""
     status = state.get("workflow_status")
     if status in (WorkflowStatus.SUCCESS, WorkflowStatus.PARTIAL_SUCCESS):
         return "rank_leaderboard"
-    return "handle_failure"
+    return "diagnose_failure"
+
+
+def route_after_diagnosis(state: ExperimentWorkflowState) -> str:
+    """Route after failure diagnosis based on recoverability, retry budget, and candidate survival."""
+    if state.get("is_recoverable") and state.get("retry_count", 0) < state.get("max_retries", 2):
+        return "handle_failure"
+
+    # Candidate-specific failure where other candidates succeeded
+    runs = state.get("candidate_runs") or []
+    if any(r.status.value == "success" for r in runs):
+        return "rank_leaderboard"
+
+    return "finalize_workflow"
 
 
 def route_after_failure(state: ExperimentWorkflowState) -> str:
-    """Route to retry execution if failure is recoverable and retries remain, else finalize."""
+    """Route after failure handling: rerun experiments if retry prepared, else finalize."""
     if (
         state.get("is_recoverable")
         and state.get("retry_count", 0) <= state.get("max_retries", 2)
@@ -116,6 +130,7 @@ def create_workflow_graph(checkpointer: Optional[Any] = None) -> Any:
     workflow.add_node("fallback_plan", fallback_plan_node)
     workflow.add_node("execute_experiments", execute_experiments_node)
     workflow.add_node("evaluate_results", evaluate_results_node)
+    workflow.add_node("diagnose_failure", diagnose_failure_node)
     workflow.add_node("handle_failure", handle_failure_node)
     workflow.add_node("rank_leaderboard", rank_leaderboard_node)
     workflow.add_node("finalize_workflow", finalize_workflow_node)
@@ -162,7 +177,7 @@ def create_workflow_graph(checkpointer: Optional[Any] = None) -> Any:
         route_after_execution,
         {
             "evaluate_results": "evaluate_results",
-            "handle_failure": "handle_failure",
+            "diagnose_failure": "diagnose_failure",
         },
     )
 
@@ -171,7 +186,17 @@ def create_workflow_graph(checkpointer: Optional[Any] = None) -> Any:
         route_after_evaluation,
         {
             "rank_leaderboard": "rank_leaderboard",
+            "diagnose_failure": "diagnose_failure",
+        },
+    )
+
+    workflow.add_conditional_edges(
+        "diagnose_failure",
+        route_after_diagnosis,
+        {
             "handle_failure": "handle_failure",
+            "rank_leaderboard": "rank_leaderboard",
+            "finalize_workflow": "finalize_workflow",
         },
     )
 
@@ -250,6 +275,10 @@ def run_orchestration_workflow(
         "retry_count": 0,
         "max_retries": max_retries,
         "is_recoverable": False,
+        "failure_category": None,
+        "failure_diagnosis": None,
+        "recovery_actions": [],
+        "recovery_attempt_count": 0,
         "execution_trace": [],
     }
 

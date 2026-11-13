@@ -24,6 +24,19 @@ from automl.planner.proposer import (
 )
 from automl.planner.provider import get_llm_provider
 from automl.planner.schemas import LLMExperimentProposal
+from automl.recovery.diagnoser import (
+    apply_recovery_actions_to_plan,
+    categorize_failure,
+    consult_llm_for_diagnosis,
+    generate_deterministic_recovery,
+    validate_recovery_action,
+)
+from automl.recovery.schemas import (
+    ActionType,
+    FailureCategory,
+    FailureDiagnosis,
+    RecoveryAction,
+)
 from automl.trainer.engine import ExperimentEngine, build_default_experiment_config
 from automl.trainer.schemas import (
     CLASSIFICATION_METRICS,
@@ -647,8 +660,92 @@ def evaluate_results_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
     }
 
 
+def diagnose_failure_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
+    """Node: Diagnose root cause of failure and construct bounded adaptive recovery actions."""
+    trace = list(state.get("execution_trace", []))
+    trace.append("diagnose_failure")
+    logger.info("Executing node: diagnose_failure")
+
+    error_msg = state.get("error_message") or ""
+    candidate_runs = state.get("candidate_runs") or []
+    plan = state.get("plan")
+    retry_count = state.get("retry_count", 0)
+    max_retries = state.get("max_retries", 2)
+
+    # 1. Categorize failure and determine root cause
+    category, root_cause, is_rec, affected = categorize_failure(
+        error_msg=error_msg,
+        candidate_runs=candidate_runs,
+        plan=plan,
+    )
+
+    # If retry budget exhausted, mark unrecoverable
+    if retry_count >= max_retries:
+        is_rec = False
+        root_cause += f" (Retry budget of {max_retries} exhausted)."
+
+    diagnosis = FailureDiagnosis(
+        category=category,
+        is_recoverable=is_rec,
+        root_cause=root_cause,
+        affected_candidates=affected,
+        source="deterministic_rules",
+    )
+
+    # 2. Check for optional LLM diagnosis recommendation if available
+    llm_actions: List[RecoveryAction] = []
+    if is_rec and plan:
+        custom_llm = LLMRegistry.resolve(state.get("llm_ref")) or state.get("llm_instance")
+        if custom_llm is not None:
+            llm_rec = consult_llm_for_diagnosis(
+                error_msg=error_msg,
+                plan=plan,
+                candidate_runs=candidate_runs,
+                llm=custom_llm,
+            )
+            if llm_rec and llm_rec.is_recoverable:
+                action = RecoveryAction(
+                    action_type=llm_rec.recommended_action,
+                    target_candidate=llm_rec.target_candidate,
+                    parameter_adjustments=llm_rec.parameter_adjustments,
+                    rationale=f"LLM recommended: {llm_rec.rationale}",
+                )
+                if validate_recovery_action(action, plan):
+                    llm_actions.append(action)
+                    diagnosis.source = "llm_assisted"
+
+    # 3. Generate deterministic recovery actions if LLM didn't supply valid ones
+    actions = llm_actions if llm_actions else (
+        generate_deterministic_recovery(diagnosis, plan) if plan else []
+    )
+
+    # Validate all actions against catalogue and boundaries
+    valid_actions = [a for a in actions if (plan and validate_recovery_action(a, plan))] if plan else []
+    diagnosis.suggested_actions = valid_actions
+
+    if is_rec and not valid_actions:
+        is_rec = False
+        diagnosis.is_recoverable = False
+        diagnosis.root_cause += " (No valid recovery action could be safely constructed)."
+
+    # Record diagnosis and recovery actions in trace
+    trace.append(f"failure_diagnosis: category={category.value}, root_cause={root_cause}, recoverable={is_rec}")
+    for a in valid_actions:
+        target_str = f", target={a.target_candidate}" if a.target_candidate else ""
+        trace.append(f"recovery_action: type={a.action_type.value}{target_str}, rationale={a.rationale}")
+
+    return {
+        "failure_category": category,
+        "failure_diagnosis": diagnosis.model_dump(),
+        "recovery_actions": [a.model_dump() for a in valid_actions],
+        "is_recoverable": is_rec,
+        "error_category": ErrorCategory.RECOVERABLE_RUNTIME if is_rec else ErrorCategory.FATAL_RUNTIME,
+        "execution_trace": trace,
+    }
+
+
 def handle_failure_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
-    """Node: Bounded retry handler for explicitly classified recoverable failures."""
+    """Node: Bounded adaptive recovery executor applying validated plan modifications."""
     trace = list(state.get("execution_trace", []))
     trace.append("handle_failure")
     logger.info("Executing node: handle_failure")
@@ -656,30 +753,54 @@ def handle_failure_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
     retries = state.get("retry_count", 0) + 1
     max_retries = state.get("max_retries", 2)
     is_recoverable = state.get("is_recoverable", False)
+    current_plan = state.get("plan")
+    raw_actions = state.get("recovery_actions") or []
+    rec_count = state.get("recovery_attempt_count", 0) + 1
 
     logger.info(f"handle_failure: retry {retries}/{max_retries}, recoverable={is_recoverable}")
 
-    if is_recoverable and retries <= max_retries:
-        logger.info(f"Attempting recoverable retry #{retries}...")
-        # Adjust plan slightly for retry (e.g., increase max total time by 50%)
-        current_plan = state.get("plan")
-        if current_plan:
-            adjusted_plan = current_plan.model_copy(
-                update={"max_total_time_seconds": int(current_plan.max_total_time_seconds * 1.5)}
-            )
-        else:
-            adjusted_plan = None
+    # If failure has not passed through diagnose_failure (e.g. input or plan validation error)
+    if not state.get("failure_category"):
+        error_msg = state.get("error_message") or ""
+        category, root_cause, is_rec, affected = categorize_failure(error_msg, plan=current_plan)
+        is_recoverable = is_rec and is_recoverable
+
+    if is_recoverable and retries <= max_retries and current_plan:
+        logger.info(f"Applying adaptive recovery attempt #{retries}...")
+        actions = [RecoveryAction.model_validate(a) for a in raw_actions]
+
+        # Apply validated adjustments to plan
+        updated_plan, summaries = apply_recovery_actions_to_plan(current_plan, actions)
+
+        for s in summaries:
+            trace.append(f"recovery_attempt_{retries}: {s}")
+
+        # Attempt MLflow logging if tracking is active
+        try:
+            from automl.tracking.tracker import MLflowTracker
+            tracker = MLflowTracker()
+            if state.get("failure_category"):
+                tracker.client.set_tag(
+                    run_id=None,
+                    key="recovery_attempt",
+                    value=str(retries),
+                )
+        except Exception:
+            pass
 
         return {
             "retry_count": retries,
-            "plan": adjusted_plan,
+            "recovery_attempt_count": rec_count,
+            "plan": updated_plan,
             "workflow_status": WorkflowStatus.RUNNING,
+            "is_recoverable": True,
             "execution_trace": trace,
         }
 
     # Non-recoverable or retries exhausted
     return {
         "retry_count": retries,
+        "recovery_attempt_count": rec_count,
         "workflow_status": WorkflowStatus.FAILED,
         "is_recoverable": False,
         "execution_trace": trace,

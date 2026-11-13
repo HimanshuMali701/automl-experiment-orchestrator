@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 from typing_extensions import TypedDict
 
 from automl.profiler.schemas import DatasetProfile, TaskType
+from automl.recovery.schemas import FailureCategory
 from automl.trainer.schemas import (
     CandidateRunResult,
     ExperimentConfig,
@@ -85,6 +86,12 @@ class ExperimentWorkflowState(TypedDict):
     retry_count: int
     max_retries: int
     is_recoverable: bool
+
+    # Phase 3: Failure Diagnosis & Adaptive Recovery
+    failure_category: Optional[FailureCategory]
+    failure_diagnosis: Optional[Dict[str, Any]]
+    recovery_actions: List[Dict[str, Any]]
+    recovery_attempt_count: int
 
     # Execution audit trail
     execution_trace: List[str]
