@@ -12,6 +12,7 @@ from automl.api.schemas import (
     ExperimentResultResponse,
     HealthResponse,
     JobStatus,
+    PlanApprovalView,
 )
 
 
@@ -104,6 +105,7 @@ class APIClient:
         test_size: float = 0.20,
         random_seed: int = 42,
         use_llm_planner: bool = False,
+        requires_approval: bool = False,
     ) -> ExperimentJobResponse:
         """Call POST /experiments to enqueue an asynchronous AutoML job."""
         url = f"{self.base_url}/experiments"
@@ -114,6 +116,7 @@ class APIClient:
             "test_size": test_size,
             "random_seed": random_seed,
             "use_llm_planner": use_llm_planner,
+            "requires_approval": requires_approval,
         }
         if primary_metric:
             data["primary_metric"] = primary_metric
@@ -152,4 +155,40 @@ class APIClient:
                 return ExperimentResultResponse.model_validate(res.json())
         except httpx.RequestError as exc:
             raise APIConnectionError(f"Connection failed while retrieving results for job {experiment_id}: {str(exc)}") from exc
+
+    def get_workflow_events(self, experiment_id: str) -> list[Dict[str, Any]]:
+        """Call GET /experiments/{experiment_id}/events to retrieve live LangGraph execution events."""
+        url = f"{self.base_url}/experiments/{experiment_id}/events"
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                res = client.get(url)
+                if res.status_code != 200:
+                    self._handle_response_error(res)
+                return res.json()
+        except httpx.RequestError as exc:
+            raise APIConnectionError(f"Connection failed while retrieving events for job {experiment_id}: {str(exc)}") from exc
+
+    def get_workflow_inspector(self, experiment_id: str) -> Dict[str, Any]:
+        """Call GET /experiments/{experiment_id}/inspector to retrieve aggregated telemetry and timelines."""
+        url = f"{self.base_url}/experiments/{experiment_id}/inspector"
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                res = client.get(url)
+                if res.status_code != 200:
+                    self._handle_response_error(res)
+                return res.json()
+        except httpx.RequestError as exc:
+            raise APIConnectionError(f"Connection failed while retrieving inspector data for job {experiment_id}: {str(exc)}") from exc
+
+    def get_pending_approval(self, experiment_id: str) -> PlanApprovalView:
+        """Call GET /experiments/{experiment_id}/approval to retrieve pending plan for review."""
+        url = f"{self.base_url}/experiments/{experiment_id}/approval"
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                res = client.get(url)
+                if res.status_code != 200:
+                    self._handle_response_error(res)
+                return PlanApprovalView.model_validate(res.json())
+        except httpx.RequestError as exc:
+            raise APIConnectionError(f"Connection failed while retrieving pending approval for job {experiment_id}: {str(exc)}") from exc
 

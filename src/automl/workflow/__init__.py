@@ -5,6 +5,13 @@ from automl.workflow.checkpointer import (
     get_default_checkpointer,
     reset_default_checkpointer,
 )
+from automl.workflow.events import (
+    EventManager,
+    EventType,
+    NODE_TO_STAGE,
+    WorkflowEvent,
+    get_event_manager,
+)
 from automl.workflow.graph import (
     create_workflow_graph,
     resume_orchestration_workflow,
@@ -38,6 +45,11 @@ __all__ = [
     "SqliteCheckpointSaver",
     "get_default_checkpointer",
     "reset_default_checkpointer",
+    "EventManager",
+    "EventType",
+    "WorkflowEvent",
+    "get_event_manager",
+    "NODE_TO_STAGE",
     "ExperimentWorkflowState",
     "WorkflowStatus",
     "ErrorCategory",

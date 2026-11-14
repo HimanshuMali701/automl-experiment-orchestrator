@@ -63,6 +63,13 @@ class ExperimentJobResponse(BaseModel):
     approval_status: Optional[str] = Field(default=None, description="Current approval status: pending, approved, or rejected.")
     approval_url: Optional[str] = Field(default=None, description="URL to view and act on pending plan approval.")
 
+    # Phase 5 Observability & Inspector fields
+    current_stage: Optional[str] = Field(default=None, description="Human-readable current workflow stage.")
+    execution_trace: List[str] = Field(default_factory=list, description="Ordered trace of executed workflow steps.")
+    current_node: Optional[str] = Field(default=None, description="Currently active LangGraph node.")
+    completed_nodes: List[str] = Field(default_factory=list, description="List of completed node names in execution order.")
+    pending_approval: bool = Field(default=False, description="Whether the workflow is currently blocked waiting for approval.")
+
 
 class CandidatePlanView(BaseModel):
     """Configuration view for an individual candidate model in a proposed plan."""
@@ -141,4 +148,46 @@ class ErrorResponse(BaseModel):
     """Standardized API error response envelope."""
     detail: str = Field(..., description="Human-readable error explanation.")
     error_type: str = Field(..., description="Machine-readable error type identifier.")
+
+
+class WorkflowEventView(BaseModel):
+    """Structured view of a single LangGraph execution event."""
+    event_id: str = Field(..., description="Unique event identifier.")
+    experiment_id: str = Field(..., description="Experiment UUID.")
+    timestamp: str = Field(..., description="ISO 8601 event timestamp.")
+    event_type: str = Field(..., description="Event type category.")
+    node: Optional[str] = Field(default=None, description="Graph node name.")
+    stage: Optional[str] = Field(default=None, description="Human-readable workflow stage.")
+    status: Optional[str] = Field(default=None, description="Execution status.")
+    duration_seconds: Optional[float] = Field(default=None, description="Node execution duration in seconds.")
+    summary: str = Field(..., description="Sanitized human-readable event summary.")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Sanitized event details.")
+
+
+class NodeTimelineItem(BaseModel):
+    """Timing and status summary for an individual workflow node."""
+    node: str = Field(..., description="Node name.")
+    stage: str = Field(..., description="Human-readable stage.")
+    status: str = Field(..., description="Status: completed, running, failed, waiting_for_approval, pending, or skipped.")
+    start_time: Optional[str] = Field(default=None, description="ISO 8601 start timestamp.")
+    end_time: Optional[str] = Field(default=None, description="ISO 8601 completion timestamp.")
+    duration_seconds: Optional[float] = Field(default=None, description="Execution duration in seconds.")
+    summary: Optional[str] = Field(default=None, description="Execution summary.")
+
+
+class WorkflowInspectorResponse(BaseModel):
+    """Comprehensive observability view for the Agent Workflow Inspector."""
+    experiment_id: str = Field(..., description="Experiment UUID.")
+    status: JobStatus = Field(..., description="Current job status.")
+    current_node: Optional[str] = Field(default=None, description="Currently active node.")
+    current_stage: Optional[str] = Field(default=None, description="Currently active stage.")
+    completed_nodes: List[str] = Field(default_factory=list, description="Completed nodes in order.")
+    pending_approval: bool = Field(default=False, description="Whether currently blocked waiting for approval.")
+    execution_trace: List[str] = Field(default_factory=list, description="Ordered execution trace.")
+    events: List[WorkflowEventView] = Field(default_factory=list, description="All workflow events chronologically.")
+    timeline: List[NodeTimelineItem] = Field(default_factory=list, description="Aggregated node execution timeline.")
+    routing_decisions: List[Dict[str, Any]] = Field(default_factory=list, description="Evaluated conditional routing decisions.")
+    llm_interactions: List[Dict[str, Any]] = Field(default_factory=list, description="LLM proposals and repair reflections.")
+    recovery_history: List[Dict[str, Any]] = Field(default_factory=list, description="Failure diagnosis and recovery history.")
+
 

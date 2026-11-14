@@ -13,9 +13,13 @@ from automl.api.schemas import (
     ExperimentResultResponse,
     HealthResponse,
     JobStatus,
+    NodeTimelineItem,
     PlanApprovalView,
     RejectionRequest,
+    WorkflowEventView,
+    WorkflowInspectorResponse,
 )
+from automl.workflow.events import get_event_manager
 from automl.core.config import get_settings
 from automl.core.exceptions import (
     AutoMLError,
@@ -304,6 +308,11 @@ async def create_experiment(
         requires_approval=job.requires_approval,
         approval_status=job.approval_status,
         approval_url=approval_url,
+        current_stage=job.current_stage,
+        execution_trace=job.execution_trace,
+        current_node=job.current_node,
+        completed_nodes=job.completed_nodes,
+        pending_approval=job.pending_approval,
     )
 
 
@@ -348,6 +357,11 @@ def get_experiment_status(experiment_id: str, request: Request) -> ExperimentJob
         requires_approval=job.requires_approval,
         approval_status=job.approval_status,
         approval_url=approval_url,
+        current_stage=job.current_stage,
+        execution_trace=job.execution_trace,
+        current_node=job.current_node,
+        completed_nodes=job.completed_nodes,
+        pending_approval=job.pending_approval,
     )
 
 
@@ -491,6 +505,11 @@ def approve_experiment_plan(
         requires_approval=updated_job.requires_approval,
         approval_status=updated_job.approval_status,
         approval_url=approval_url,
+        current_stage=updated_job.current_stage,
+        execution_trace=updated_job.execution_trace,
+        current_node=updated_job.current_node,
+        completed_nodes=updated_job.completed_nodes,
+        pending_approval=updated_job.pending_approval,
     )
 
 
@@ -555,4 +574,120 @@ def reject_experiment_plan(
         requires_approval=updated_job.requires_approval,
         approval_status=updated_job.approval_status,
         approval_url=approval_url,
+        current_stage=updated_job.current_stage,
+        execution_trace=updated_job.execution_trace,
+        current_node=updated_job.current_node,
+        completed_nodes=updated_job.completed_nodes,
+        pending_approval=updated_job.pending_approval,
+    )
+
+
+@router.get(
+    "/experiments/{experiment_id}/events",
+    response_model=list[WorkflowEventView],
+    summary="Get Workflow Events",
+    description="Retrieve the chronological sequence of fine-grained LangGraph execution events for an experiment.",
+    responses={
+        200: {"description": "List of recorded workflow execution events"},
+        404: {"model": ErrorResponse, "description": "Experiment ID not found"},
+    },
+)
+def get_workflow_events(experiment_id: str) -> list[WorkflowEventView]:
+    """Retrieve incremental real-time events for an active or completed experiment."""
+    manager = get_job_manager()
+    job = manager.get_job(experiment_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' was not found.",
+        )
+
+    event_mgr = get_event_manager()
+    events = event_mgr.get_events(experiment_id)
+    return [
+        WorkflowEventView(
+            event_id=ev.event_id,
+            experiment_id=ev.experiment_id,
+            timestamp=ev.timestamp,
+            event_type=ev.event_type.value,
+            node=ev.node,
+            stage=ev.stage,
+            status=ev.status,
+            duration_seconds=ev.duration_seconds,
+            summary=ev.summary,
+            details=ev.details,
+        )
+        for ev in events
+    ]
+
+
+@router.get(
+    "/experiments/{experiment_id}/inspector",
+    response_model=WorkflowInspectorResponse,
+    summary="Get Workflow Inspector Data",
+    description="Retrieve comprehensive telemetry, node timelines, routing decisions, LLM reflections, and failure recovery history.",
+    responses={
+        200: {"model": WorkflowInspectorResponse, "description": "Aggregated workflow inspector data"},
+        404: {"model": ErrorResponse, "description": "Experiment ID not found"},
+    },
+)
+def get_workflow_inspector(experiment_id: str) -> WorkflowInspectorResponse:
+    """Retrieve aggregated telemetry data for the Agent Workflow Inspector."""
+    manager = get_job_manager()
+    job = manager.get_job(experiment_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' was not found.",
+        )
+
+    event_mgr = get_event_manager()
+    raw_events = event_mgr.get_events(experiment_id)
+    events_view = [
+        WorkflowEventView(
+            event_id=ev.event_id,
+            experiment_id=ev.experiment_id,
+            timestamp=ev.timestamp,
+            event_type=ev.event_type.value,
+            node=ev.node,
+            stage=ev.stage,
+            status=ev.status,
+            duration_seconds=ev.duration_seconds,
+            summary=ev.summary,
+            details=ev.details,
+        )
+        for ev in raw_events
+    ]
+
+    timeline_data = event_mgr.get_timeline(experiment_id)
+    timeline_view = [
+        NodeTimelineItem(
+            node=item["node"],
+            stage=item["stage"],
+            status=item["status"],
+            start_time=item.get("start_time"),
+            end_time=item.get("end_time"),
+            duration_seconds=item.get("duration_seconds"),
+            summary=item.get("summary"),
+        )
+        for item in timeline_data
+    ]
+
+    routing_decisions = event_mgr.get_routing_decisions(experiment_id)
+    llm_interactions = event_mgr.get_llm_interactions(experiment_id)
+    recovery_history = event_mgr.get_recovery_history(experiment_id)
+
+    return WorkflowInspectorResponse(
+        experiment_id=job.experiment_id,
+        status=job.status,
+        current_node=job.current_node,
+        current_stage=job.current_stage,
+        completed_nodes=job.completed_nodes,
+        pending_approval=job.pending_approval,
+        execution_trace=job.execution_trace,
+        events=events_view,
+        timeline=timeline_view,
+        routing_decisions=routing_decisions,
+        llm_interactions=llm_interactions,
+        recovery_history=recovery_history,
     )

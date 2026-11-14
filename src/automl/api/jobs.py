@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import threading
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 import pandas as pd
@@ -26,6 +26,7 @@ from automl.profiler.schemas import TaskType
 from automl.recovery.diagnoser import ALLOWED_HYPERPARAMETERS
 from automl.trainer.schemas import ExperimentConfig, MetricName, ModelFamily
 from automl.workflow import (
+    NODE_TO_STAGE,
     WorkflowStatus,
     resume_orchestration_workflow,
     run_orchestration_workflow,
@@ -134,6 +135,13 @@ class JobRecord(BaseModel):
     pending_plan: Optional[Dict[str, Any]] = None
     validation_summary: Optional[Dict[str, Any]] = None
     dataset_path: Optional[str] = None
+
+    # Phase 5 Observability & Inspector state
+    current_stage: Optional[str] = None
+    execution_trace: List[str] = Field(default_factory=list)
+    current_node: Optional[str] = None
+    completed_nodes: List[str] = Field(default_factory=list)
+    pending_approval: bool = False
 
 
 class JobManager:
@@ -246,6 +254,11 @@ class JobManager:
                 requires_approval=requires_approval,
                 approval_status="pending" if requires_approval else None,
                 dataset_path=str(dataset_file) if dataset_file.exists() else None,
+                current_stage="Queued",
+                execution_trace=[],
+                current_node=None,
+                completed_nodes=[],
+                pending_approval=False,
             )
             self._jobs[experiment_id] = job
             self._persist_job(job)
@@ -296,10 +309,26 @@ class JobManager:
             job = self._jobs[experiment_id]
             job.status = JobStatus.RUNNING
             job.started_at = datetime.now(timezone.utc).isoformat()
+            job.current_stage = "Starting"
             self._persist_job(job)
 
         start_time = datetime.now(timezone.utc)
         logger.info(f"Starting execution of job {experiment_id} for target '{target_column}'")
+
+        def on_step(node_name: str, node_update: Dict[str, Any]) -> None:
+            with self._lock:
+                j = self._jobs.get(experiment_id)
+                if not j:
+                    return
+                j.current_node = node_name
+                j.current_stage = NODE_TO_STAGE.get(node_name, node_name)
+                if node_name not in j.completed_nodes:
+                    j.completed_nodes.append(node_name)
+                if "execution_trace" in node_update:
+                    j.execution_trace = list(node_update["execution_trace"])
+                elif node_name not in j.execution_trace:
+                    j.execution_trace.append(node_name)
+                self._persist_job(j)
 
         try:
             final_state = run_orchestration_workflow(
@@ -310,6 +339,7 @@ class JobManager:
                 user_constraints=user_constraints,
                 requires_approval=requires_approval,
                 thread_id=experiment_id,
+                on_step=on_step,
             )
 
             # Check if workflow paused waiting for human approval
@@ -318,6 +348,13 @@ class JobManager:
                     job = self._jobs[experiment_id]
                     job.status = JobStatus.WAITING_FOR_APPROVAL
                     job.approval_status = "pending"
+                    job.pending_approval = True
+                    job.current_node = "approval_gate"
+                    job.current_stage = "Human Approval Checkpoint"
+                    if "approval_gate" not in job.completed_nodes:
+                        job.completed_nodes.append("approval_gate")
+                    if final_state.get("execution_trace"):
+                        job.execution_trace = list(final_state["execution_trace"])
                     plan = final_state.get("plan")
                     if plan:
                         job.pending_plan = plan.model_dump()
@@ -353,6 +390,8 @@ class JobManager:
                 job.completed_at = end_time.isoformat()
                 job.execution_time_seconds = round(duration, 3)
                 job.error_message = f"Experiment processing failed: {str(e)}"
+                job.current_stage = "Failed"
+                job.pending_approval = False
                 self._persist_job(job)
 
     def _resume_job(
@@ -365,12 +404,28 @@ class JobManager:
         start_time = datetime.now(timezone.utc)
         logger.info(f"Resuming execution of job {experiment_id} following approval.")
 
+        def on_step(node_name: str, node_update: Dict[str, Any]) -> None:
+            with self._lock:
+                j = self._jobs.get(experiment_id)
+                if not j:
+                    return
+                j.current_node = node_name
+                j.current_stage = NODE_TO_STAGE.get(node_name, node_name)
+                if node_name not in j.completed_nodes:
+                    j.completed_nodes.append(node_name)
+                if "execution_trace" in node_update:
+                    j.execution_trace = list(node_update["execution_trace"])
+                elif node_name not in j.execution_trace:
+                    j.execution_trace.append(node_name)
+                self._persist_job(j)
+
         try:
             final_state = resume_orchestration_workflow(
                 thread_id=experiment_id,
                 approved_plan=approved_plan,
                 approval_status="approved",
                 approval_feedback=approval_feedback,
+                on_step=on_step,
             )
             self._handle_completed_state(experiment_id, final_state, start_time)
         except Exception as e:
@@ -383,6 +438,8 @@ class JobManager:
                 job.completed_at = end_time.isoformat()
                 job.execution_time_seconds = round(duration, 3)
                 job.error_message = f"Resumed experiment processing failed: {str(e)}"
+                job.current_stage = "Failed"
+                job.pending_approval = False
                 self._persist_job(job)
 
     def _handle_completed_state(
@@ -399,6 +456,10 @@ class JobManager:
             job = self._jobs[experiment_id]
             job.completed_at = end_time.isoformat()
             job.execution_time_seconds = round(duration, 3)
+            job.current_node = None
+            job.pending_approval = False
+            if final_state.get("execution_trace"):
+                job.execution_trace = list(final_state["execution_trace"])
 
             plan = final_state.get("plan")
             if plan:
@@ -498,15 +559,19 @@ class JobManager:
                     job.task_type = task_key
 
                 job.status = JobStatus.COMPLETED
+                job.current_stage = "Completed"
                 logger.info(f"Job {experiment_id} successfully completed in {duration:.2f}s")
 
             elif final_state["workflow_status"] == WorkflowStatus.REJECTED:
                 job.status = JobStatus.REJECTED
+                job.current_stage = "Rejected"
+                job.current_node = "approval_gate"
                 job.error_message = final_state.get("error_message") or "Plan was rejected by user."
                 logger.info(f"Job {experiment_id} marked as REJECTED.")
             else:
                 err_msg = final_state.get("error_message") or "Workflow failed without explicit message"
                 job.status = JobStatus.FAILED
+                job.current_stage = "Failed"
                 job.error_message = err_msg
                 logger.warning(f"Job {experiment_id} workflow failed: {err_msg}")
 

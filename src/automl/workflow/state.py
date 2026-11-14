@@ -89,6 +89,7 @@ class ExperimentWorkflowState(TypedDict):
     result_explanation: Optional[Any]
 
     # Diagnostics, error taxonomy & loop control
+    thread_id: Optional[str]
     workflow_status: WorkflowStatus
     error_category: ErrorCategory
     error_message: Optional[str]

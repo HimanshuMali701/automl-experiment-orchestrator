@@ -48,6 +48,14 @@ class SqliteCheckpointSaver(
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_db()
 
+    @classmethod
+    def from_conn_string(
+        cls, conn_string: str, serde: Optional[SerializerProtocol] = None
+    ) -> "SqliteCheckpointSaver":
+        """Instantiate saver from connection string or database file path."""
+        path = conn_string.replace("sqlite:///", "").replace("sqlite://", "")
+        return cls(db_path=path, serde=serde)
+
     def _init_db(self) -> None:
         """Create checkpointer storage tables if they do not exist."""
         with self._lock, self._conn:
