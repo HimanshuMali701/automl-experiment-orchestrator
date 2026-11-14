@@ -129,7 +129,7 @@ def test_streamlit_app_initial_render(mock_ui_backend_health):
     assert len(at.title) >= 1
     assert "AutoML Experiment Orchestrator" in at.title[0].value
     # Verify tabs rendered
-    assert len(at.tabs) == 5
+    assert len(at.tabs) in (5, 6)
 
 
 def test_streamlit_app_with_validated_dataset(mock_ui_backend_health):

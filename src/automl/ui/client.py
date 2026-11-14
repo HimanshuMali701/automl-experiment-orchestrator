@@ -61,9 +61,13 @@ class APIClient:
             with httpx.Client(timeout=5.0) as client:
                 res = client.get(url)
                 if res.status_code != 200:
-                    self._handle_response_error(res)
+                    raise APIConnectionError(
+                        f"Cannot connect to AutoML API backend at '{self.base_url}' (HTTP {res.status_code})."
+                    )
                 return HealthResponse.model_validate(res.json())
-        except httpx.RequestError as exc:
+        except (httpx.RequestError, APIClientError) as exc:
+            if isinstance(exc, APIConnectionError):
+                raise
             raise APIConnectionError(
                 f"Cannot connect to AutoML API backend at '{self.base_url}'. "
                 f"Please verify the backend server is running (e.g. 'uvicorn automl.api.app:app --host 127.0.0.1 --port 8000')."

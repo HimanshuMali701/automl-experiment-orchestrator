@@ -170,6 +170,10 @@ class JobManager:
                 with open(job_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     job = JobRecord.model_validate(data)
+                    # Startup hygiene: in-flight jobs from prior process lifetimes are marked terminated
+                    if job.status in (JobStatus.RUNNING, JobStatus.QUEUED):
+                        job.status = JobStatus.FAILED
+                        job.error_message = "Job was interrupted by prior server shutdown."
                     self._jobs[job.experiment_id] = job
             except Exception as e:
                 logger.warning(f"Failed to load persisted job file {job_file.name}: {str(e)}")
