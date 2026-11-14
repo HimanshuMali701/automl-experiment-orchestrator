@@ -12,7 +12,9 @@ class JobStatus(str, Enum):
     """Execution status states for background experiment jobs."""
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     COMPLETED = "completed"
+    REJECTED = "rejected"
     FAILED = "failed"
 
 
@@ -57,6 +59,49 @@ class ExperimentJobResponse(BaseModel):
     results_url: str = Field(..., description="URL to retrieve results once completed.")
     user_constraints: Optional[Dict[str, Any]] = Field(default=None, description="User-specified experiment constraints.")
     effective_config: Optional[Dict[str, Any]] = Field(default=None, description="Effective parameters applied during execution.")
+    requires_approval: bool = Field(default=False, description="Whether this job pauses for human approval.")
+    approval_status: Optional[str] = Field(default=None, description="Current approval status: pending, approved, or rejected.")
+    approval_url: Optional[str] = Field(default=None, description="URL to view and act on pending plan approval.")
+
+
+class CandidatePlanView(BaseModel):
+    """Configuration view for an individual candidate model in a proposed plan."""
+    candidate_name: str = Field(..., description="Unique name of the candidate model.")
+    model_family: str = Field(..., description="Model family identifier.")
+    is_baseline: bool = Field(..., description="Whether this model serves as the baseline benchmark.")
+    hyperparameters: Dict[str, Any] = Field(default_factory=dict, description="Configured hyperparameters.")
+    description: Optional[str] = Field(default=None, description="Model candidate description or rationale.")
+
+
+class PlanApprovalView(BaseModel):
+    """Detailed experiment plan view exposed to human reviewers for approval or overrides."""
+    experiment_id: str = Field(..., description="Unique experiment ID.")
+    status: JobStatus = Field(..., description="Current job lifecycle status.")
+    approval_status: str = Field(..., description="Approval status ('pending', 'approved', 'rejected').")
+    task_type: str = Field(..., description="Detected ML task type.")
+    target_column: str = Field(..., description="Target column name.")
+    primary_metric: str = Field(..., description="Primary ranking metric.")
+    cv_folds: int = Field(..., description="Number of cross-validation folds.")
+    test_size: float = Field(..., description="Held-out test split ratio.")
+    random_seed: int = Field(..., description="Random seed for reproducibility.")
+    candidates: List[CandidatePlanView] = Field(default_factory=list, description="Proposed candidate models.")
+    validation_summary: Dict[str, Any] = Field(default_factory=dict, description="Validation report and rationale.")
+    user_constraints: Optional[Dict[str, Any]] = Field(default=None, description="User-specified constraints.")
+    approval_feedback: Optional[str] = Field(default=None, description="Reviewer feedback or notes.")
+
+
+class ApprovalRequest(BaseModel):
+    """Payload for human approval submission with optional hyperparameter overrides."""
+    feedback: Optional[str] = Field(default=None, description="Optional reviewer feedback or notes.")
+    hyperparameter_overrides: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Optional candidate-specific hyperparameter overrides, e.g. {'logistic_regression': {'C': 0.5}}.",
+    )
+
+
+class RejectionRequest(BaseModel):
+    """Payload for rejecting an experiment plan."""
+    feedback: Optional[str] = Field(default=None, description="Reason or feedback for plan rejection.")
 
 
 class CandidateSummaryResponse(BaseModel):

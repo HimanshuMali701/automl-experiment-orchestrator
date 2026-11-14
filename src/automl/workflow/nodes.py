@@ -1,6 +1,7 @@
 """Graph node implementations for validation, profiling, planning, execution, and error handling."""
 
 from typing import Any, Dict, List, Optional, Union
+from langgraph.errors import NodeInterrupt
 import pandas as pd
 
 from automl.core.exceptions import (
@@ -576,9 +577,61 @@ def fallback_plan_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
         "plan": default_plan,
         "plan_metadata": plan_meta,
         "validation_errors": [],
-        "workflow_status": WorkflowStatus.RUNNING,
+        "workflow_status": WorkflowStatus.PLANNING,
         "execution_trace": trace,
     }
+
+
+def approval_gate_node(state: ExperimentWorkflowState) -> Dict[str, Any]:
+    """Node: Human-in-the-loop checkpoint gate before experiment execution.
+
+    If approval is disabled: continues directly to execution.
+    If approval is enabled:
+      - If pending: pauses workflow execution and raises NodeInterrupt.
+      - If approved: validates/applies approved configuration and continues.
+      - If rejected: stops execution cleanly and routes to finalize.
+    """
+    trace = list(state.get("execution_trace", []))
+    trace.append("approval_gate")
+    logger.info("Executing node: approval_gate")
+
+    requires_approval = state.get("requires_approval", False)
+    approval_status = state.get("approval_status")
+
+    if not requires_approval:
+        trace.append("approval_gate: skipped (requires_approval=False)")
+        return {
+            "current_node": "approval_gate",
+            "approval_status": "approved",
+            "workflow_status": WorkflowStatus.RUNNING,
+            "execution_trace": trace,
+        }
+
+    if approval_status == "approved":
+        trace.append("approval_gate: approved")
+        approved_plan = state.get("approved_plan") or state.get("plan")
+        return {
+            "current_node": "approval_gate",
+            "plan": approved_plan,
+            "workflow_status": WorkflowStatus.RUNNING,
+            "execution_trace": trace,
+        }
+
+    if approval_status == "rejected":
+        trace.append("approval_gate: rejected")
+        return {
+            "current_node": "approval_gate",
+            "workflow_status": WorkflowStatus.REJECTED,
+            "error_category": ErrorCategory.NONE,
+            "error_message": state.get("approval_feedback") or "Experiment plan was rejected by user.",
+            "is_recoverable": False,
+            "execution_trace": trace,
+        }
+
+    # In-flight approval needed: pause execution
+    trace.append("approval_gate: waiting_for_approval")
+    logger.info("Human approval required: interrupting workflow before experiment execution.")
+    raise NodeInterrupt("Waiting for human approval of proposed experiment plan.")
 
 
 def execute_experiments_node(state: ExperimentWorkflowState) -> Dict[str, Any]:

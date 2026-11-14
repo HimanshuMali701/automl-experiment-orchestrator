@@ -1,17 +1,20 @@
 """FastAPI route handlers for dataset validation, experiment submission, and status queries."""
 
 from typing import Optional
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import ValidationError
 
 from automl.api.jobs import get_job_manager
 from automl.api.schemas import (
+    ApprovalRequest,
     DatasetValidationResponse,
     ErrorResponse,
     ExperimentJobResponse,
     ExperimentResultResponse,
     HealthResponse,
     JobStatus,
+    PlanApprovalView,
+    RejectionRequest,
 )
 from automl.core.config import get_settings
 from automl.core.exceptions import (
@@ -180,6 +183,7 @@ async def create_experiment(
     cv_folds: int = Form(5, description="Number of cross-validation folds (2 to 10)."),
     test_size: float = Form(0.2, description="Held-out test split fraction (0.05 to 0.50)."),
     random_seed: int = Form(42, description="Random seed for reproducibility."),
+    requires_approval: bool = Form(False, description="Whether to pause workflow for human approval before model training."),
 ) -> ExperimentJobResponse:
     """Validate parameters, load dataset, and launch experiment in background thread."""
     settings = get_settings()
@@ -270,6 +274,7 @@ async def create_experiment(
             cv_folds=cv_folds,
             test_size=test_size,
             random_seed=random_seed,
+            requires_approval=requires_approval,
         )
     except ResourceExhaustionError as e:
         raise HTTPException(
@@ -280,6 +285,7 @@ async def create_experiment(
     base_url = str(request.base_url).rstrip("/")
     status_url = f"{base_url}/experiments/{job.experiment_id}"
     results_url = f"{base_url}/experiments/{job.experiment_id}/results"
+    approval_url = f"{base_url}/experiments/{job.experiment_id}/approval" if job.requires_approval else None
 
     return ExperimentJobResponse(
         experiment_id=job.experiment_id,
@@ -295,6 +301,9 @@ async def create_experiment(
         results_url=results_url,
         user_constraints=job.user_constraints,
         effective_config=job.effective_config,
+        requires_approval=job.requires_approval,
+        approval_status=job.approval_status,
+        approval_url=approval_url,
     )
 
 
@@ -320,6 +329,7 @@ def get_experiment_status(experiment_id: str, request: Request) -> ExperimentJob
     base_url = str(request.base_url).rstrip("/")
     status_url = f"{base_url}/experiments/{job.experiment_id}"
     results_url = f"{base_url}/experiments/{job.experiment_id}/results"
+    approval_url = f"{base_url}/experiments/{job.experiment_id}/approval" if job.requires_approval else None
 
     return ExperimentJobResponse(
         experiment_id=job.experiment_id,
@@ -335,6 +345,9 @@ def get_experiment_status(experiment_id: str, request: Request) -> ExperimentJob
         results_url=results_url,
         user_constraints=job.user_constraints,
         effective_config=job.effective_config,
+        requires_approval=job.requires_approval,
+        approval_status=job.approval_status,
+        approval_url=approval_url,
     )
 
 
@@ -380,3 +393,166 @@ def get_experiment_results(experiment_id: str) -> ExperimentResultResponse:
         )
 
     return job.result
+
+
+@router.get(
+    "/experiments/{experiment_id}/approval",
+    response_model=PlanApprovalView,
+    summary="Get Pending Experiment Plan for Review",
+    description="Retrieve the proposed experiment plan, model candidates, hyperparameters, and validation warnings when an experiment is awaiting human approval.",
+    responses={
+        200: {"model": PlanApprovalView, "description": "Proposed experiment plan pending approval"},
+        404: {"model": ErrorResponse, "description": "Experiment ID not found"},
+        409: {"model": ErrorResponse, "description": "Job is not in waiting_for_approval status"},
+    },
+)
+def get_pending_plan_for_approval(experiment_id: str) -> PlanApprovalView:
+    """Retrieve proposed plan configuration and validation summary awaiting human review."""
+    manager = get_job_manager()
+    job = manager.get_job(experiment_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' was not found.",
+        )
+
+    try:
+        return manager.get_pending_approval(experiment_id)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+
+
+@router.post(
+    "/experiments/{experiment_id}/approve",
+    response_model=ExperimentJobResponse,
+    summary="Approve Experiment Plan",
+    description="Approve the proposed plan to resume workflow and model execution. Optionally supply validated hyperparameter overrides.",
+    responses={
+        200: {"model": ExperimentJobResponse, "description": "Experiment plan approved; execution resumed"},
+        404: {"model": ErrorResponse, "description": "Experiment ID not found"},
+        409: {"model": ErrorResponse, "description": "Job is not in waiting_for_approval status or already processed"},
+        422: {"model": ErrorResponse, "description": "Disallowed or invalid hyperparameter overrides"},
+    },
+)
+def approve_experiment_plan(
+    experiment_id: str,
+    request: Request,
+    payload: Optional[ApprovalRequest] = Body(None),
+) -> ExperimentJobResponse:
+    """Approve a pending experiment plan, validate any overrides against catalogue allowlists, and resume execution."""
+    manager = get_job_manager()
+    job = manager.get_job(experiment_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' was not found.",
+        )
+
+    overrides = payload.hyperparameter_overrides if payload else None
+    feedback = payload.feedback if payload else None
+
+    try:
+        updated_job = manager.approve_job(
+            experiment_id=experiment_id,
+            overrides=overrides,
+            feedback=feedback,
+        )
+    except ValueError as e:
+        err_msg = str(e)
+        if "not found" in err_msg.lower():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err_msg)
+        elif "cannot be approved" in err_msg.lower() or "status" in err_msg.lower():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=err_msg)
+        else:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=err_msg)
+
+    base_url = str(request.base_url).rstrip("/")
+    status_url = f"{base_url}/experiments/{updated_job.experiment_id}"
+    results_url = f"{base_url}/experiments/{updated_job.experiment_id}/results"
+    approval_url = f"{base_url}/experiments/{updated_job.experiment_id}/approval"
+
+    return ExperimentJobResponse(
+        experiment_id=updated_job.experiment_id,
+        status=updated_job.status,
+        target_column=updated_job.target_column,
+        task_type=updated_job.task_type,
+        created_at=updated_job.created_at,
+        started_at=updated_job.started_at,
+        completed_at=updated_job.completed_at,
+        execution_time_seconds=updated_job.execution_time_seconds,
+        error_message=updated_job.error_message,
+        status_url=status_url,
+        results_url=results_url,
+        user_constraints=updated_job.user_constraints,
+        effective_config=updated_job.effective_config,
+        requires_approval=updated_job.requires_approval,
+        approval_status=updated_job.approval_status,
+        approval_url=approval_url,
+    )
+
+
+@router.post(
+    "/experiments/{experiment_id}/reject",
+    response_model=ExperimentJobResponse,
+    summary="Reject Experiment Plan",
+    description="Reject the proposed plan and stop the experiment workflow without executing candidate models.",
+    responses={
+        200: {"model": ExperimentJobResponse, "description": "Experiment plan rejected; job terminated"},
+        404: {"model": ErrorResponse, "description": "Experiment ID not found"},
+        409: {"model": ErrorResponse, "description": "Job is not in waiting_for_approval status"},
+    },
+)
+def reject_experiment_plan(
+    experiment_id: str,
+    request: Request,
+    payload: Optional[RejectionRequest] = Body(None),
+) -> ExperimentJobResponse:
+    """Reject a pending experiment plan, preventing candidate model execution and marking job as rejected."""
+    manager = get_job_manager()
+    job = manager.get_job(experiment_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Experiment '{experiment_id}' was not found.",
+        )
+
+    feedback = payload.feedback if payload else None
+
+    try:
+        updated_job = manager.reject_job(
+            experiment_id=experiment_id,
+            feedback=feedback,
+        )
+    except ValueError as e:
+        err_msg = str(e)
+        if "not found" in err_msg.lower():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err_msg)
+        else:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=err_msg)
+
+    base_url = str(request.base_url).rstrip("/")
+    status_url = f"{base_url}/experiments/{updated_job.experiment_id}"
+    results_url = f"{base_url}/experiments/{updated_job.experiment_id}/results"
+    approval_url = f"{base_url}/experiments/{updated_job.experiment_id}/approval"
+
+    return ExperimentJobResponse(
+        experiment_id=updated_job.experiment_id,
+        status=updated_job.status,
+        target_column=updated_job.target_column,
+        task_type=updated_job.task_type,
+        created_at=updated_job.created_at,
+        started_at=updated_job.started_at,
+        completed_at=updated_job.completed_at,
+        execution_time_seconds=updated_job.execution_time_seconds,
+        error_message=updated_job.error_message,
+        status_url=status_url,
+        results_url=results_url,
+        user_constraints=updated_job.user_constraints,
+        effective_config=updated_job.effective_config,
+        requires_approval=updated_job.requires_approval,
+        approval_status=updated_job.approval_status,
+        approval_url=approval_url,
+    )

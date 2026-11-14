@@ -19,10 +19,12 @@ class WorkflowStatus(str, Enum):
     INITIALIZED = "initialized"
     PROFILING = "profiling"
     PLANNING = "planning"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     RUNNING = "running"
     EVALUATING = "evaluating"
     SUCCESS = "success"
     PARTIAL_SUCCESS = "partial_success"
+    REJECTED = "rejected"
     FAILED = "failed"
 
 
@@ -72,6 +74,13 @@ class ExperimentWorkflowState(TypedDict):
     current_proposal: Optional[Dict[str, Any]]
     llm_ref: Optional[str]
     llm_instance: Optional[Any]
+
+    # Phase 4: Human-in-the-Loop Approval Checkpoint
+    requires_approval: bool
+    approval_status: Optional[str]
+    approval_feedback: Optional[str]
+    approved_plan: Optional[ExperimentConfig]
+    current_node: Optional[str]
 
     # Execution & results
     candidate_runs: List[CandidateRunResult]
