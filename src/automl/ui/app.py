@@ -2,6 +2,10 @@
 
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load local environment variables from .env
+load_dotenv()
 
 # Add project src directory to Python import path
 SRC_DIR = Path(__file__).resolve().parents[2]

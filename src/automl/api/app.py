@@ -43,11 +43,19 @@ def create_app(settings: Settings | None = None, enable_lifespan: bool = True) -
         lifespan=lifespan if enable_lifespan else None,
     )
 
-    # 1. CORS Middleware (allows local frontend dashboard communication)
+    # 1. CORS Middleware (allows local and deployed frontend dashboard communication)
+    raw_origins = cfg.cors_origins.strip()
+    if raw_origins == "*":
+        allowed_origins = ["*"]
+        allow_credentials = False
+    else:
+        allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+        allow_credentials = True
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=allowed_origins,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )

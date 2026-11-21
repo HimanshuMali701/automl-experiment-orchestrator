@@ -2,7 +2,11 @@
 
 import os
 from typing import Any, Dict, Optional
+from dotenv import load_dotenv
 import streamlit as st
+
+# Load environment configuration
+load_dotenv()
 
 from automl.api.schemas import (
     DatasetValidationResponse,
@@ -13,11 +17,24 @@ from automl.api.schemas import (
 from automl.ui.client import APIClient
 
 
-DEFAULT_API_BASE_URL = os.getenv("AUTOML_API_BASE_URL", "https://automl-backend-trtp.onrender.com").rstrip("/")
+DEFAULT_API_BASE_URL = (
+    os.getenv("API_BASE_URL")
+    or os.getenv("AUTOML_API_BASE_URL")
+    or "https://automl-backend-trtp.onrender.com"
+).rstrip("/")
 
 
 def init_session_state() -> None:
     """Initialize all Streamlit session state variables defensively on app load."""
+    # Automatically migrate any stale localhost URLs left over in browser session cache
+    if st.session_state.get("api_base_url") in (
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000/",
+        "http://localhost:8000/",
+    ):
+        st.session_state["api_base_url"] = DEFAULT_API_BASE_URL
+
     defaults: Dict[str, Any] = {
         # Backend connectivity
         "api_base_url": DEFAULT_API_BASE_URL,

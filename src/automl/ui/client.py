@@ -1,6 +1,7 @@
 """HTTP client wrapping FastAPI backend endpoints for the Streamlit UI."""
 
 import io
+import os
 from typing import Any, Dict, Optional, Tuple
 import httpx
 from pydantic import ValidationError
@@ -14,6 +15,12 @@ from automl.api.schemas import (
     JobStatus,
     PlanApprovalView,
 )
+
+DEFAULT_CLIENT_BASE_URL = (
+    os.getenv("API_BASE_URL")
+    or os.getenv("AUTOML_API_BASE_URL")
+    or "https://automl-backend-trtp.onrender.com"
+).rstrip("/")
 
 
 class APIClientError(Exception):
@@ -33,7 +40,7 @@ class APIConnectionError(APIClientError):
 class APIClient:
     """Robust synchronous client communicating with the FastAPI backend."""
 
-    def __init__(self, base_url: str = "https://automl-backend-trtp.onrender.com", timeout_seconds: float = 60.0):
+    def __init__(self, base_url: str = DEFAULT_CLIENT_BASE_URL, timeout_seconds: float = 60.0):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout_seconds
 

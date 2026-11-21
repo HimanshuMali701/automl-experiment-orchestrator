@@ -3,7 +3,7 @@
 import streamlit as st
 
 from automl.ui.client import APIConnectionError
-from automl.ui.state import get_api_client
+from automl.ui.state import DEFAULT_API_BASE_URL, get_api_client
 
 
 def render_header() -> None:
@@ -59,8 +59,13 @@ def render_header() -> None:
         st.markdown("- [MLflow UI (Local)](http://127.0.0.1:5000)")
 
         st.divider()
-        if st.button("🔄 Reset UI State", use_container_width=True):
+        if st.button(
+            "🔄 Reset UI State",
+            help="Clear cached session data and restore default settings.",
+            use_container_width=True,
+        ):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
+        st.caption("🧹 Clears uploaded data, active runs, and resets connection to default.")
 

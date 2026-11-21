@@ -1,0 +1,53 @@
+services:
+  # ============================================================================
+  # 1. FastAPI Backend Web Service
+  # ============================================================================
+  - type: web
+    name: automl-backend
+    env: python
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt && pip install -e .
+    startCommand: uvicorn automl.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PYTHONPATH
+        value: src
+      - key: ENVIRONMENT
+        value: production
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: MAX_CONCURRENT_JOBS
+        value: "2"
+      - key: MAX_TRAINING_TIME_SECONDS
+        value: "600"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
+
+  # ============================================================================
+  # 2. Streamlit Frontend Web Service
+  # ============================================================================
+  - type: web
+    name: automl-frontend
+    env: python
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt && pip install -e .
+    startCommand: streamlit run src/automl/ui/app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PYTHONPATH
+        value: src
+      - key: API_BASE_URL
+        value: https://automl-backend-trtp.onrender.com
+      - key: AUTOML_API_BASE_URL
+        value: https://automl-backend-trtp.onrender.com

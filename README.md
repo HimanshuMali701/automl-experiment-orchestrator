@@ -918,19 +918,6 @@ The current local persistence and job management architecture should be adapted 
 
 ---
 
-## 16. License
-
-This project is licensed under the MIT License.
-
----
-
 ## Author
 
 **Himanshu Mali**
-
-Computer Engineering Student | AI/ML Enthusiast | Software Developer
-
-- GitHub: [HimanshuMali701](https://github.com/HimanshuMali701)
-- Project Repository: [AutoML Experiment Orchestrator](https://github.com/HimanshuMali701/automl-experiment-orchestrator)
-
-**Built to explore the intersection of Agentic AI, Machine Learning Automation, and Reliable Software Engineering.**

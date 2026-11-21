@@ -48,6 +48,10 @@ class Settings(BaseSettings):
         default="https://automl-backend-trtp.onrender.com",
         description="Base URL for the AutoML backend API server",
     )
+    cors_origins: str = Field(
+        default="*",
+        description="Allowed CORS origins (comma-separated, e.g. 'https://app.onrender.com,http://localhost:8501', or '*' for all)",
+    )
     max_concurrent_jobs: int = Field(default=2, ge=1, le=16, description="Max concurrent background jobs")
 
     # Optional LLM integration (Groq)
