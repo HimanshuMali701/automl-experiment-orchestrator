@@ -16,7 +16,7 @@ def render_header() -> None:
         st.header("🔌 Backend Connectivity")
         api_url = st.text_input(
             "FastAPI Base URL",
-            value=st.session_state.get("api_base_url", "http://127.0.0.1:8000"),
+            value=st.session_state.get("api_base_url", "https://automl-backend-trtp.onrender.com/"),
             help="Base address of the running FastAPI backend server.",
         )
         if api_url != st.session_state.get("api_base_url"):
