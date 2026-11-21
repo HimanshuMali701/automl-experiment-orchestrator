@@ -1,5 +1,11 @@
 """Main Streamlit dashboard application for AutoML Experiment Orchestrator."""
 
+import sys
+from pathlib import Path
+
+# Add project src directory to Python import path
+SRC_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(SRC_DIR))
 import streamlit as st
 
 from automl.ui.components.config import render_experiment_config_view
