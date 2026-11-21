@@ -13,7 +13,7 @@ from automl.api.schemas import (
 from automl.ui.client import APIClient
 
 
-DEFAULT_API_BASE_URL = os.getenv("AUTOML_API_BASE_URL", "http://127.0.0.1:8000")
+DEFAULT_API_BASE_URL = os.getenv("AUTOML_API_BASE_URL", "https://automl-backend-trtp.onrender.com").rstrip("/")
 
 
 def init_session_state() -> None:

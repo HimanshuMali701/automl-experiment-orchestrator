@@ -33,7 +33,7 @@ class APIConnectionError(APIClientError):
 class APIClient:
     """Robust synchronous client communicating with the FastAPI backend."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8000", timeout_seconds: float = 30.0):
+    def __init__(self, base_url: str = "https://automl-backend-trtp.onrender.com", timeout_seconds: float = 60.0):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout_seconds
 
@@ -58,7 +58,7 @@ class APIClient:
         """Call GET /health to verify backend connectivity and job capacity."""
         url = f"{self.base_url}/health"
         try:
-            with httpx.Client(timeout=5.0) as client:
+            with httpx.Client(timeout=30.0) as client:
                 res = client.get(url)
                 if res.status_code != 200:
                     raise APIConnectionError(

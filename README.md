@@ -1,468 +1,936 @@
 # AutoML Experiment Orchestrator
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688.svg)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.40%2B-FF4B4B.svg)](https://streamlit.io/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-Stateful_Workflows-orange.svg)](https://langchain-ai.github.io/langgraph/)
-[![LangChain](https://img.shields.io/badge/LangChain-Structured_Planning-1C3C3C.svg)](https://python.langchain.com/)
-[![MLflow](https://img.shields.io/badge/MLflow-Tracking_&_Artifacts-0194E2.svg)](https://mlflow.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.40%2B-FF4B4B)
+![LangGraph](https://img.shields.io/badge/LangGraph-Workflow_Orchestration-orange)
+![LangChain](https://img.shields.io/badge/LangChain-LLM_Integration-1C3C3C)
+![MLflow](https://img.shields.io/badge/MLflow-Experiment_Tracking-0194E2)
+![License](https://img.shields.io/badge/License-MIT-yellow)
 
-A production-grade, statefully orchestrated Automated Machine Learning (AutoML) platform designed to eliminate the most critical failure modes of conventional AutoML and naive LLM code generators — including data leakage, hallucinated hyperparameter spaces, uncontrolled loop executions, ungrounded performance reporting, and unmonitored background jobs.
+**An intelligent, agentic AutoML platform that automates machine learning experimentation through stateful AI orchestration, adaptive failure recovery, leakage-free model evaluation, and experiment tracking.**
 
-Built on an explicit separation of concerns:
-- **LangGraph**: Stateful workflow orchestration, cyclic plan-repair reflection loops, adaptive failure recovery, and checkpoint-backed Human-in-the-Loop (HITL) approval gates.
-- **LangChain**: Schema-constrained LLM experiment planning, validation feedback reflection, and data-grounded champion explanations with deterministic zero-LLM fallbacks.
-- **Scikit-Learn**: Mathematically rigorous, leakage-free cross-validation with fold-isolated preprocessing, baseline comparisons, and strictly withheld held-out test evaluation.
-- **MLflow**: Parameter, metric, and champion model artifact persistence with cryptographic dataset fingerprinting.
-- **FastAPI & Streamlit**: High-performance asynchronous REST backend with concurrency controls coupled to a rich multi-stage analytical dashboard and real-time Agent Workflow Inspector.
+AutoML Experiment Orchestrator is designed to simplify the end-to-end machine learning lifecycle. Users can upload structured datasets, analyze data quality, configure experiments, generate model proposals, execute multiple ML candidates, compare performance, and identify the best-performing model through an interactive dashboard.
+
+Unlike conventional AutoML implementations, this platform combines LLM-assisted experiment planning with deterministic validation, controlled execution, and transparent evaluation.
+
+### Key Technologies
+
+- **LangGraph:** Stateful workflow orchestration, conditional routing, retry mechanisms, and Human-in-the-Loop approval.
+- **LangChain:** Structured LLM-powered experiment planning, plan validation feedback, and model explanations.
+- **Groq:** LLM inference provider with deterministic fallback when unavailable.
+- **Scikit-Learn:** Model training, preprocessing pipelines, cross-validation, and evaluation.
+- **MLflow:** Experiment tracking, parameter logging, metric tracking, and model artifacts.
+- **FastAPI:** REST API and background experiment management.
+- **Streamlit:** Interactive analytical dashboard and workflow monitoring.
 
 ---
 
 ## Table of Contents
-- [1. Architecture Principles & Solved Problems](#1-architecture-principles--solved-problems)
-- [2. System Architecture](#2-system-architecture)
-- [3. Separation of Concerns](#3-separation-of-concerns)
-- [4. LangGraph Workflow Lifecycle & State Machine](#4-langgraph-workflow-lifecycle--state-machine)
-- [5. Core Platform Capabilities](#5-core-platform-capabilities)
-- [6. Verified End-to-End Scenarios (A through L)](#6-verified-end-to-end-scenarios-a-through-l)
-- [7. Benchmark Experiment Report (Wisconsin Breast Cancer)](#7-benchmark-experiment-report-wisconsin-breast-cancer)
-- [8. Installation & Environment Setup](#8-installation--environment-setup)
-- [9. Running the System](#9-running-the-system)
-- [10. REST API Specification](#10-rest-api-specification)
-- [11. Interactive UI & Agent Workflow Inspector](#11-interactive-ui--agent-workflow-inspector)
-- [12. Automated Verification & Testing](#12-automated-verification--testing)
-- [13. Security, Guardrails & Resource Governance](#13-security-guardrails--resource-governance)
-- [14. Engineering Limitations & Roadmap](#14-engineering-limitations--roadmap)
+
+1. [Project Overview](#1-project-overview)
+2. [System Architecture](#2-system-architecture)
+3. [Technology Stack](#3-technology-stack)
+4. [LangGraph Workflow Lifecycle](#4-langgraph-workflow-lifecycle)
+5. [Core Features](#5-core-features)
+6. [Machine Learning Pipeline](#6-machine-learning-pipeline)
+7. [Benchmark Results](#7-benchmark-results)
+8. [Project Structure](#8-project-structure)
+9. [Installation and Setup](#9-installation-and-setup)
+10. [Running the Application](#10-running-the-application)
+11. [REST API Documentation](#11-rest-api-documentation)
+12. [Dashboard Workflow](#12-dashboard-workflow)
+13. [Testing and Verification](#13-testing-and-verification)
+14. [Security and Resource Management](#14-security-and-resource-management)
+15. [Current Limitations and Future Improvements](#15-current-limitations-and-future-improvements)
+16. [License](#16-license)
 
 ---
 
-## 1. Architecture Principles & Solved Problems
+## 1. Project Overview
 
-| Traditional AutoML Failure Mode | How This Platform Solves It |
-| :--- | :--- |
-| **Pervasive Data Leakage**: Scalers, imputers, and encoders fitted across the full dataset prior to train/test splitting. | **Fold-Isolated Preprocessing**: Scikit-Learn `Pipeline` and `ColumnTransformer` instances are fitted exclusively inside each cross-validation fold on `X_train_fold`. |
-| **Contaminated Model Selection**: Using test data to guide model selection, hyperparameter tuning, or early stopping. | **Strict Test Set Isolation**: 20% held-out test split is partitioned upfront and completely withheld from CV. Champion model ranking is based solely on validation fold metrics; the test set is evaluated exactly once after selection. |
-| **Unconstrained LLM Code Generation**: Agents generating arbitrary Python code or bash scripts, risking severe security holes or hallucinated APIs. | **Schema-Constrained Planning**: LLM output is strictly bounded to structured Pydantic schemas. Model families and hyperparameters are validated against a strict deterministic catalogue. Zero arbitrary code execution. |
-| **Fragile LLM Dependencies**: System crashes when the LLM service experiences network downtime, rate limits, or context errors. | **Deterministic Fallback**: Seamless zero-LLM operation via heuristic rule-based proposals and template-grounded explanations when `GROQ_API_KEY` is omitted or calls fail. |
-| **Blind Retries & Infinite Loops**: Retrying failed operations blindly without diagnosing root causes or adapting configurations. | **Diagnostic Adaptive Recovery**: A dedicated diagnosis node classifies failures (convergence, timeout, invalid hyperparameters, data incompatibilities) and applies deterministic mitigations with bounded recovery attempts. |
-| **Black-Box Execution**: Users unable to inspect or intervene in agent decisions before compute resources are spent. | **Human-in-the-Loop Checkpoints**: Configurable approval gate halts the state graph prior to model execution using SQLite checkpointers, exposing proposed configurations for human review, modification, or rejection. |
-| **Opaque Agent Reasoning**: No visibility into agent decisions, routing transitions, or execution latency. | **Agent Workflow Inspector**: Live streaming event bus tracking node execution times, state diffs, routing decisions, repair iterations, and diagnostic traces. |
+Traditional machine learning experimentation involves several repetitive activities:
+
+- Understanding and profiling datasets.
+- Selecting appropriate machine learning algorithms.
+- Configuring hyperparameters.
+- Training and evaluating multiple models.
+- Handling training failures.
+- Comparing model performance.
+- Tracking experiments and saving trained models.
+
+This platform automates these activities through an orchestrated workflow.
+
+### Problems Addressed
+
+| Problem | Platform Solution |
+|---|---|
+| Manual model selection | LLM-assisted model planning |
+| Invalid model configurations | Schema validation and model catalogue |
+| Data leakage | Fold-isolated preprocessing |
+| Failed experiments | Diagnostic failure recovery |
+| Uncontrolled execution | Bounded retries and resource limits |
+| Lack of transparency | Real-time workflow monitoring |
+| Unverified model performance | Separate validation and test evaluation |
+| LLM service unavailability | Deterministic fallback mechanism |
+
+### Main Objectives
+
+1. Automate machine learning experimentation.
+2. Introduce agentic workflow orchestration using LangGraph.
+3. Generate structured experiment plans using LangChain and Groq.
+4. Ensure reliable and leakage-free model evaluation.
+5. Provide adaptive recovery when experiments fail.
+6. Track experiments using MLflow.
+7. Provide an interactive dashboard for monitoring and analysis.
 
 ---
 
 ## 2. System Architecture
 
+The platform follows a modular architecture with separate responsibilities for the frontend, API, orchestration engine, machine learning execution, and experiment tracking.
+
+### High-Level Architecture
+
 ```mermaid
 flowchart TD
-    subgraph UI["Streamlit Frontend (:8501)"]
-        U1["1. Ingestion & Validation"]
-        U2["2. Profile & Diagnostics"]
-        U3["3. Configure & Launch"]
-        U4["4. Execution Progress & Approval"]
-        U5["5. Model Leaderboard"]
-        U6["6. Candidate Hyperparameters"]
-        U7["7. Final Report & Test Metrics"]
-        U8["Inspector: Real-Time Graph Trace"]
-    end
+    U["User"] --> UI["Streamlit Dashboard"]
 
-    subgraph API["FastAPI Backend (:8000)"]
-        A1["POST /datasets/validate"]
-        A2["POST /experiments"]
-        A3["GET /experiments/{id}"]
-        A4["GET /experiments/{id}/results"]
-        A5["GET /experiments/{id}/approval"]
-        A6["POST /experiments/{id}/approval"]
-        A7["GET /experiments/{id}/trace"]
-        JM["JobManager (Bounded ThreadPool & State Persistence)"]
-    end
+    UI --> API["FastAPI Backend"]
 
-    subgraph Graph["LangGraph Stateful Orchestrator"]
-        N1["validate_input"] --> N2["profile_data"]
-        N2 --> N3["create_plan"]
-        N3 --> N4["validate_plan"]
-        
-        N4 -->|Invalid & Retries Left| N5["repair_plan"]
-        N5 --> N4
-        N4 -->|Invalid & Retries Exhausted| N3_FB["fallback_plan"]
-        N3_FB --> N6
-        
-        N4 -->|Valid| N6{"approval_gate"}
-        N6 -->|Approval Enabled| PAUSE["PAUSE: Interrupt & Save State\n(WAITING_FOR_APPROVAL)"]
-        PAUSE -->|Human Resume / API Post| N7["execute_experiments"]
-        N6 -->|Approval Disabled| N7
-        
-        N7 -->|Training Errors & Retries Left| N8["diagnose_failure"]
-        N8 --> N9["apply_recovery"]
-        N9 --> N7
-        
-        N7 -->|Success / Fatal Handled| N10["evaluate_results"]
-        N10 --> N11["rank_leaderboard"]
-        N11 --> N12["finalize_workflow"]
-    end
+    API --> JM["Experiment Job Manager"]
 
-    subgraph Core["Execution, Tracking & Storage"]
-        CP[("SQLite / Memory Checkpointer")]
-        SK["Scikit-Learn (Leakage-Free CV Pipelines)"]
-        ML["MLflow (Parameters, Metrics, Artifacts)"]
-        DISK[("Disk Persistence: artifacts/jobs/*.json")]
-    end
+    JM --> LG["LangGraph Workflow"]
 
-    U1 -->|Multipart CSV| A1
-    U3 -->|Submit Config & Constraints| A2
-    A2 --> JM
-    JM --> Graph
-    Graph <--> CP
-    Graph --> SK
-    Graph --> ML
-    JM --> DISK
+    LG --> LC["LangChain Planner"]
+    LC --> GQ["Groq LLM"]
 
-    U4 -->|Poll Status & Node| A3
-    U4 -->|Submit Human Approval/Rejection| A6
-    U5 & U6 & U7 -->|Fetch Leaderboard & Explanations| A4
-    U8 -->|Stream Real-Time Trace| A7
+    LG --> ML["Scikit-Learn Engine"]
+    ML --> SK["Model Training and Evaluation"]
+
+    LG --> MF["MLflow Tracking"]
+
+    LG --> DB["SQLite Checkpoint Storage"]
+
+    JM --> FS["Job State Persistence"]
+
+    API --> UI
+    UI --> R["Leaderboard and Final Report"]
 ```
+
+### Architecture Components
+
+| Component | Responsibility |
+|---|---|
+| Streamlit | User interface and experiment dashboard |
+| FastAPI | REST API and request handling |
+| JobManager | Background job execution and lifecycle management |
+| LangGraph | Workflow orchestration and state management |
+| LangChain | LLM integration and structured planning |
+| Groq | LLM inference |
+| Scikit-Learn | Model training and evaluation |
+| MLflow | Experiment tracking and model artifacts |
+| SQLite | Workflow checkpoint persistence |
+| File Storage | Dataset and job-related persistence |
+
+### Architecture Principles
+
+**Separation of Concerns**
+
+Each component has a clearly defined responsibility.
+
+**Controlled AI Execution**
+
+The LLM proposes experiment configurations but does not generate or execute arbitrary Python code.
+
+**Deterministic Validation**
+
+Model families, hyperparameters, and experiment constraints are validated before execution.
+
+**Reliable Fallback**
+
+The system can continue operating without an available LLM service through deterministic planning.
 
 ---
 
-## 3. Separation of Concerns
+## 3. Technology Stack
 
-```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                               SEPARATION OF RESPONSIBILITIES                           │
-├───────────────────────┬────────────────────────────────────────────────────────────────┤
-│ Component             │ Core Responsibilities                                          │
-├───────────────────────┼────────────────────────────────────────────────────────────────┤
-│ LangGraph             │ - Stateful graph orchestration and execution state management. │
-│                       │ - Bounded reflection loops (plan repair & adaptive recovery).  │
-│                       │ - Checkpoint-backed pauses for Human-in-the-Loop approval.     │
-│                       │ - Real-time execution tracing and node transition event bus.   │
-├───────────────────────┼────────────────────────────────────────────────────────────────┤
-│ LangChain             │ - Schema-constrained prompt construction with system context.  │
-│                       │ - Structured Pydantic output parsing (LLMExperimentProposal).   │
-│                       │ - Plan repair reflection using validation error feedback.       │
-│                       │ - Data-grounded executive summaries and champion explanations. │
-│                       │ - Zero-LLM fallback generation when API key is unavailable.    │
-├───────────────────────┼────────────────────────────────────────────────────────────────┤
-│ Scikit-Learn          │ - Leakage-free preprocessing (ColumnTransformer, Imputers).     │
-│                       │ - Stratified and KFold cross-validation partitioning.          │
-│                       │ - Model fitting (Linear/Logistic, Tree ensembles, Boosting).   │
-│                       │ - Multi-metric evaluation (Accuracy, F1, ROC-AUC, R2, RMSE).    │
-│                       │ - Naive baseline comparison (DummyClassifier, DummyRegressor). │
-├───────────────────────┼────────────────────────────────────────────────────────────────┤
-│ MLflow                │ - Cryptographic dataset fingerprinting (SHA-256).              │
-│                       │ - Hierarchical run logging (Parent workflow + child candidate).│
-│                       │ - Hyperparameter, fold metric, and timing logging.             │
-│                       │ - Serialization of champion model pipeline artifacts.          │
-├───────────────────────┼────────────────────────────────────────────────────────────────┤
-│ FastAPI & Streamlit   │ - Non-blocking RESTful background job lifecycle management.    │
-│                       │ - Defensive input validation, sanitization, and rate limits.   │
-│                       │ - Intuitive 7-stage interactive dashboard and Workflow Tracer. │
-└───────────────────────┴────────────────────────────────────────────────────────────────┘
-```
+| Category | Technology |
+|---|---|
+| Programming Language | Python |
+| Frontend | Streamlit |
+| Backend | FastAPI |
+| API Server | Uvicorn |
+| AI Orchestration | LangGraph |
+| LLM Framework | LangChain |
+| LLM Provider | Groq |
+| Machine Learning | Scikit-Learn |
+| Data Processing | Pandas, NumPy |
+| Experiment Tracking | MLflow |
+| Checkpoint Storage | SQLite |
+| Validation | Pydantic |
+| Testing | Pytest |
+| Version Control | Git and GitHub |
 
 ---
 
-## 4. LangGraph Workflow Lifecycle & State Machine
+## 4. LangGraph Workflow Lifecycle
 
-### Graph Nodes
+LangGraph is the central orchestration engine of the platform.
 
-| Node Name | Functionality & State Changes |
-| :--- | :--- |
-| `validate_input` | Verifies dataset existence, target column, user constraints, and resource limits. |
-| `profile_data` | Computes statistical metadata, infers column datatypes, detects supervised task type, and flags class imbalance. |
-| `create_plan` | Constructs initial candidate model portfolio using LangChain (or deterministic fallback if LLM is absent). |
-| `validate_plan` | Validates proposed candidates against catalog allowlist and user constraints. Sets `is_plan_valid` and records `validation_errors`. |
-| `repair_plan` | Reflection node. Passes validation errors back to LangChain to re-prompt and repair invalid configurations. |
-| `approval_gate` | HITL gate. If `requires_approval=True`, pauses execution, saves graph checkpoint, and transitions job to `WAITING_FOR_APPROVAL`. |
-| `execute_experiments` | Fits baseline and candidate models across cross-validation folds using strict fold-level preprocessing. |
-| `diagnose_failure` | Analyzes execution errors, classifies failure mode (convergence, timeout, resources, hyperparams), and determines recovery action. |
-| `apply_recovery` | Applies grounded parameter corrections (e.g. increase `max_iter`, adjust solver, prune failing candidate) and re-executes. |
-| `evaluate_results` | Evaluates the selected champion model on the strictly held-out test split (20%) and logs final MLflow runs. |
-| `rank_leaderboard` | Ranks all candidate models based purely on validation fold primary metric scores. |
-| `finalize_workflow` | Generates grounded natural-language explanations, packages final job payload, and completes workflow. |
+It manages the complete experiment lifecycle through a collection of specialized nodes connected using conditional transitions.
 
-### Graph Routing & Conditional Edges
+Instead of executing every operation through a fixed sequence, the workflow can make decisions based on validation results, execution errors, retry limits, and human approval.
+
+### 4.1 Workflow Architecture
+
+The following diagram represents the workflow lifecycle.
 
 ```mermaid
-graph TD
-    V[validate_plan] -->|Valid Plan| A{Check Approval}
-    V -->|Invalid & Retries < 2| R[repair_plan]
-    R --> V
-    V -->|Invalid & Retries >= 2| F[Fallback Plan]
-    F --> A
-    
-    A -->|Approval Disabled| E[execute_experiments]
-    A -->|Approval Enabled| P[Pause Checkpoint]
-    P -->|User Approved| E
-    P -->|User Rejected| FIN[finalize_workflow (Failed/Cancelled)]
-    
-    E -->|Success| EV[evaluate_results]
-    E -->|Failure & Recoverable & Retries < 2| D[diagnose_failure]
-    D --> AR[apply_recovery]
-    AR --> E
-    E -->|Failure & Unrecoverable| FIN
+flowchart TD
+    START(["START"]) --> V["Validate Input"]
+
+    V --> P["Profile Dataset"]
+
+    P --> C["Create Experiment Plan"]
+
+    C --> VP["Validate Plan"]
+
+    VP --> D{"Plan Valid?"}
+
+    D -->|"No, retries available"| RP["Repair Plan"]
+
+    RP --> VP
+
+    D -->|"No, retries exhausted"| FB["Generate Fallback Plan"]
+
+    FB --> AG{"Approval Required?"}
+
+    D -->|"Yes"| AG
+
+    AG -->|"Yes"| PA["Pause for Human Approval"]
+
+    PA --> DEC{"Human Decision?"}
+
+    DEC -->|"Approved"| EX["Execute Experiments"]
+
+    DEC -->|"Rejected"| END1(["REJECTED"])
+
+    AG -->|"No"| EX
+
+    EX --> ER{"Execution Successful?"}
+
+    ER -->|"No, recoverable"| DF["Diagnose Failure"]
+
+    DF --> AR["Apply Recovery"]
+
+    AR --> EX
+
+    ER -->|"Yes"| EV["Evaluate Results"]
+
+    EV --> RL["Rank Leaderboard"]
+
+    RL --> F["Finalize Workflow"]
+
+    F --> END2(["COMPLETED"])
+```
+
+### 4.2 Workflow Nodes
+
+| Node | Responsibility |
+|---|---|
+| `validate_input` | Validates dataset, target column, constraints, and resource limits. |
+| `profile_data` | Analyzes dataset statistics, datatypes, missing values, and task type. |
+| `create_plan` | Generates model candidates using LangChain and Groq or deterministic fallback. |
+| `validate_plan` | Validates model families and hyperparameters against the supported catalogue. |
+| `repair_plan` | Attempts to correct invalid experiment configurations. |
+| `approval_gate` | Determines whether human approval is required before training. |
+| `execute_experiments` | Executes baseline and candidate model training. |
+| `diagnose_failure` | Identifies the reason behind a failed experiment. |
+| `apply_recovery` | Applies appropriate corrections before retrying execution. |
+| `evaluate_results` | Evaluates the selected champion on the held-out test dataset. |
+| `rank_leaderboard` | Ranks candidates using validation metrics. |
+| `finalize_workflow` | Generates the final experiment report and champion insights. |
+
+### 4.3 Conditional Routing
+
+The workflow supports multiple execution paths.
+
+**Plan Validation**
+
+- Valid plan: Continue to the approval gate.
+- Invalid plan: Attempt plan repair.
+- Retry limit reached: Use deterministic fallback planning.
+
+**Human Approval**
+
+- Approval disabled: Start model execution.
+- Approval enabled: Pause and save workflow state.
+- Approved: Resume experiment execution.
+- Rejected: Terminate the experiment gracefully.
+
+**Failure Recovery**
+
+- Successful execution: Continue to evaluation.
+- Recoverable failure: Diagnose and apply corrections.
+- Unrecoverable failure: Terminate the workflow with an appropriate status.
+
+### 4.4 Human-in-the-Loop Approval
+
+The platform supports checkpoint-backed approval before model training.
+
+When approval is enabled:
+
+1. The workflow generates an experiment plan.
+2. The proposed candidates are validated.
+3. The workflow pauses at the approval checkpoint.
+4. The user reviews the proposed configurations.
+5. The user approves or rejects the experiment.
+6. Approved experiments resume from their saved state.
+
+SQLite-based checkpoint persistence allows the workflow to retain its execution state while waiting for a decision.
+
+### 4.5 Adaptive Failure Recovery
+
+The system identifies different types of execution failures.
+
+| Error Category | Possible Recovery |
+|---|---|
+| `CONVERGENCE_ERROR` | Increase iteration limits or adjust solver settings. |
+| `TIMEOUT_ERROR` | Apply execution limits or reduce workload. |
+| `RESOURCE_ERROR` | Reduce resource-intensive configurations. |
+| `INVALID_HYPERPARAMETERS` | Correct invalid parameter values. |
+| `PREPROCESSING_ERROR` | Diagnose incompatible data transformations. |
+| `UNSUPPORTED_MODEL` | Remove unsupported candidates. |
+| `UNKNOWN_ERROR` | Record and handle the failure safely. |
+
+Recovery attempts are bounded to prevent uncontrolled execution loops.
+
+---
+
+## 5. Core Features
+
+### 5.1 Automated Dataset Profiling
+
+The platform analyzes uploaded CSV datasets and provides:
+
+- Dataset dimensions.
+- Column names and data types.
+- Missing value analysis.
+- Numerical statistical summaries.
+- Categorical feature information.
+- Target column selection.
+- Supervised learning task detection.
+- Classification class balance analysis.
+
+### 5.2 Intelligent Experiment Planning
+
+The experiment planner uses LangChain and Groq to generate structured model proposals.
+
+The proposed configurations are validated using Pydantic schemas and a predefined model catalogue.
+
+Supported model families include:
+
+**Classification**
+
+- Logistic Regression
+- Ridge Classifier
+- Random Forest Classifier
+- Gradient Boosting Classifier
+- Extra Trees Classifier
+- Hist Gradient Boosting Classifier
+
+**Regression**
+
+- Linear Regression
+- Ridge Regression
+- Lasso Regression
+- Random Forest Regressor
+- Gradient Boosting Regressor
+- Extra Trees Regressor
+
+### 5.3 Deterministic Fallback
+
+The platform does not depend entirely on external LLM availability.
+
+If the Groq API key is missing or the LLM service fails, the system can generate deterministic model proposals and template-based explanations.
+
+### 5.4 Automated Model Benchmarking
+
+The system compares multiple candidates against a baseline model.
+
+Supported evaluation metrics include:
+
+**Classification**
+- Accuracy
+- Precision
+- Recall
+- F1-score
+- ROC-AUC
+
+**Regression**
+- R²
+- RMSE
+- MAE
+
+### 5.5 Experiment Tracking
+
+MLflow records:
+
+- Experiment parameters.
+- Candidate model configurations.
+- Validation metrics.
+- Training durations.
+- Dataset SHA-256 fingerprints.
+- Champion model artifacts.
+
+### 5.6 Workflow Observability
+
+The Agent Workflow Inspector provides visibility into:
+
+- Executed workflow nodes.
+- Node execution durations.
+- State transitions.
+- Conditional routing decisions.
+- Plan repair attempts.
+- Failure diagnosis information.
+- Execution traces.
+
+---
+
+## 6. Machine Learning Pipeline
+
+The platform follows a structured machine learning evaluation process.
+
+### 6.1 Data Preparation
+
+The dataset is divided into training and testing partitions before model preprocessing.
+
+Default configuration:
+
+- Training data: 80%
+- Testing data: 20%
+- Cross-validation: 3 folds
+
+These values can be adjusted through experiment constraints.
+
+### 6.2 Leakage-Free Preprocessing
+
+The platform uses Scikit-Learn pipelines and ColumnTransformer.
+
+Numerical preprocessing:
+
+- SimpleImputer using median strategy.
+- StandardScaler.
+
+Categorical preprocessing:
+
+- SimpleImputer using most frequent strategy.
+- OneHotEncoder with unknown category handling.
+
+Preprocessing transformations are fitted independently inside each cross-validation training fold.
+
+### 6.3 Cross-Validation
+
+Classification tasks use stratified cross-validation.
+
+Regression tasks use standard KFold cross-validation.
+
+The model candidates are compared using validation scores.
+
+### 6.4 Baseline Comparison
+
+The system includes simple baseline models:
+
+- DummyClassifier for classification.
+- DummyRegressor for regression.
+
+These baselines help determine whether trained models provide meaningful improvements.
+
+### 6.5 Champion Selection
+
+The best-performing candidate is selected using the configured primary validation metric.
+
+The held-out test dataset is not used for model selection.
+
+After the champion is selected, the test dataset is evaluated separately to measure generalization performance.
+
+---
+
+## 7. Benchmark Results
+
+The following benchmark represents an execution on the Wisconsin Breast Cancer Diagnostic Dataset.
+
+### Dataset Information
+
+| Property | Value |
+|---|---|
+| Dataset | Wisconsin Breast Cancer |
+| Total Samples | 569 |
+| Features | 30 |
+| Total Columns | 31 |
+| Task | Binary Classification |
+| Training Samples | 455 |
+| Test Samples | 114 |
+| Cross-Validation | 3-Fold Stratified |
+| Primary Metric | F1-Macro |
+
+### Model Leaderboard
+
+| Rank | Model | Mean CV F1-Macro | CV Standard Deviation | Training Time |
+|---|---|---:|---:|---:|
+| 1 | Logistic Regression | **0.9764** | ±0.0106 | 0.33s |
+| 2 | Random Forest Classifier | 0.9532 | ±0.0195 | 2.03s |
+| 3 | Gradient Boosting Classifier | 0.9484 | ±0.0204 | 1.59s |
+| 4 | Dummy Majority Baseline | 0.3851 | ±0.0000 | 0.28s |
+
+### Champion Model
+
+**Selected Model:** Logistic Regression
+
+| Metric | Result |
+|---|---:|
+| Validation CV F1-Macro | 0.9764 |
+| Test F1-Macro | 0.9825 |
+| Test Accuracy | 0.9825 |
+| Test ROC-AUC | 0.9954 |
+| Generalization Gap | +0.0061 |
+
+Champion configuration:
+
+- Model: Logistic Regression
+- C: 1.0
+- Max Iterations: 1000
+- Scaling: StandardScaler
+- Imputation: Median
+
+The benchmark demonstrates the platform's ability to compare candidate models, select a champion using validation metrics, and evaluate its performance on a separate held-out test dataset.
+
+*These results represent the documented benchmark execution and are not guaranteed for other datasets or configurations.*
+
+---
+
+## 8. Project Structure
+
+The following is the logical organization of the application. Refer to the repository for the exact current directory and file names.
+
+```text
+automl-experiment-orchestrator/
+│
+├── src/
+│   └── automl/
+│       ├── api/
+│       │   └── app.py
+│       │
+│       ├── ui/
+│       │   └── app.py
+│       │
+│       ├── planner/
+│       │   └── catalogue.py
+│       │
+│       ├── graph/
+│       │
+│       ├── trainer/
+│       │
+│       ├── profiler/
+│       │
+│       ├── tracking/
+│       │
+│       └── core/
+│
+├── tests/
+│   ├── unit/
+│   └── integration/
+│
+├── examples/
+│   └── run_ui_journey_demo.py
+│
+├── artifacts/
+│
+├── requirements.txt
+├── .env.example
+├── .gitignore
+└── README.md
 ```
 
 ---
 
-## 5. Core Platform Capabilities
-
-### 1. Leakage-Free Data Engine
-- **Upfront Train-Test Split**: A 20% test partition is segregated before any statistical preprocessing or scaling occurs.
-- **Fold-Level Transformers**: Scikit-Learn `ColumnTransformer` combines `SimpleImputer` (median for numerical, most frequent for categorical), `StandardScaler`, and `OneHotEncoder(handle_unknown='ignore')`. Preprocessing parameters are estimated **only** from each training fold.
-- **Champion Isolation**: Model selection and hyperparameter evaluation use validation fold mean scores exclusively. The test set is evaluated exactly once on the champion model after ranking is finalized.
-
-### 2. Schema-Constrained LangChain Planning
-- **Allowlist Model Family Catalogue**: Supports `logistic_regression`, `ridge_classifier`, `random_forest_classifier`, `gradient_boosting_classifier`, `extra_trees_classifier`, `hist_gradient_boosting_classifier`, `linear_regression`, `ridge_regression`, `lasso_regression`, `random_forest_regressor`, `gradient_boosting_regressor`, and `extra_trees_regressor`.
-- **Bounded Reflection**: When invalid hyperparameters or unsupported model families are proposed, `validate_plan` captures the exact errors and passes them back to `repair_plan`. If repair retries are exhausted, the planner falls back to a deterministic candidate portfolio.
-
-### 3. Failure Diagnosis & Adaptive Recovery
-- **Deterministic Taxonomy**: Classifies exceptions into `CONVERGENCE_ERROR`, `TIMEOUT_ERROR`, `RESOURCE_ERROR`, `INVALID_HYPERPARAMETERS`, `PREPROCESSING_ERROR`, `UNSUPPORTED_MODEL`, or `UNKNOWN_ERROR`.
-- **Adaptive Remediation**: Automatically increases `max_iter` for convergence failures, switches incompatible solvers (e.g., `lbfgs` to `saga`), drops degenerate candidate configurations, or scales down batch sizes, avoiding full workflow aborts.
-
-### 4. Checkpoint-Backed Human-in-the-Loop Approval
-- **Interruptible Graph State**: Uses LangGraph's checkpointer mechanism (`SqliteSaver` / `MemorySaver`) to pause execution state when `requires_approval=True`.
-- **REST & UI Interactivity**: Users inspect proposed models, estimated runtime, and constraints. They can approve the plan to proceed immediately or reject it with feedback.
-
-### 5. Real-Time Observability & Workflow Inspector
-- **Streaming Event Bus**: Captures granular node lifecycles (timestamps, duration, state diffs, routing decisions, LLM proposal tokens, repair attempts, and diagnostic logs).
-- **Inspection UI**: The Streamlit frontend provides a live timeline view, state transition diff viewer, routing decision log, and raw JSON trace explorer.
-
----
-
-## 6. Verified End-to-End Scenarios (A through L)
-
-The platform is verified across 12 end-to-end integration scenarios implemented in `tests/integration/test_scenarios_e2e.py`:
-
-| Scenario | Objective | Validation Verification |
-| :--- | :--- | :--- |
-| **Scenario A** | Normal Classification Workflow | Stratified split, baseline comparison, 3 candidate models, champion selected strictly on CV F1-macro, held-out test evaluation completed. |
-| **Scenario B** | Normal Regression Workflow | Continuous target, R2/RMSE metrics, DummyRegressor baseline, regression model leaderboard. |
-| **Scenario C** | LLM Unavailable / Deterministic Fallback | `GROQ_API_KEY` unset; system seamlessly falls back to rule-based proposal and template-grounded explanation. |
-| **Scenario D** | Invalid LLM Plan & Successful Repair | LLM proposes invalid model; `validate_plan` detects error; `repair_plan` provides feedback; corrected plan passes validation and completes. |
-| **Scenario E** | Invalid LLM Plan & Retry Exhaustion | LLM repeatedly outputs invalid configurations; retry limit reached; system safely falls back to deterministic proposal and completes. |
-| **Scenario F** | Candidate Failure & Adaptive Recovery | Candidate triggers a convergence error; `diagnose_failure` identifies failure mode; `apply_recovery` increases `max_iter`; re-execution succeeds. |
-| **Scenario G** | Unrecoverable Candidate Failure | Fatal data incompatibility encountered; diagnosis marks failure unrecoverable; workflow terminates cleanly with status `FAILED` and sanitized error message. |
-| **Scenario H** | Human Approval & Successful Resume | Workflow pauses at `approval_gate` (`WAITING_FOR_APPROVAL`); state persisted to SQLite checkpointer; approved via API; workflow resumes and completes. |
-| **Scenario I** | Human Rejection | Workflow pauses at `approval_gate`; rejected via API; workflow terminates gracefully with status `REJECTED` and zero candidate training compute wasted. |
-| **Scenario J** | Non-Default User Constraints | Custom constraints (`primary_metric="roc_auc"`, `cv_folds=4`, `test_size=0.25`, `random_seed=99`) propagate from API/UI to workflow and trainer. |
-| **Scenario K** | MLflow Experiment & Artifact Tracking | Parent run and child candidate runs logged with parameters, metrics, dataset SHA-256 fingerprint, and serialized champion model. |
-| **Scenario L** | Real-Time Observability & Polling | `WorkflowObserver` streams node durations, state diffs, and routing decisions to `/experiments/{id}/trace` during live execution. |
-
----
-
-## 7. Benchmark Experiment Report (Wisconsin Breast Cancer)
-
-Real execution benchmark on the Wisconsin Breast Cancer diagnostic dataset (569 samples, 30 numeric features, binary classification):
-
-```
-Dataset Profile:
-  • Samples: 569 rows | 31 columns
-  • Partition: 455 training rows (80%) | 114 held-out test rows (20%)
-  • Supervised Task: binary_classification
-  • Primary Optimization Metric: f1_macro (3-Fold Stratified CV)
-```
-
-### Official Model Leaderboard
-| Rank | Model Candidate | Family | Mean CV F1-Macro | CV Std Dev | Training Time | Status |
-| :---: | :--- | :--- | :---: | :---: | :---: | :---: |
-| 🏆 **1** | **Logistic Regression** | `logistic_regression` | **0.9764** | **±0.0106** | **0.33s** | **SUCCESS (Champion)** |
-| 2 | Random Forest Classifier | `random_forest_classifier` | 0.9532 | ±0.0195 | 2.03s | SUCCESS |
-| 3 | Gradient Boosting | `gradient_boosting_classifier`| 0.9484 | ±0.0204 | 1.59s | SUCCESS |
-| 4 | Dummy Majority Baseline | `dummy_classifier` | 0.3851 | ±0.0000 | 0.28s | SUCCESS (Baseline) |
-
-### Held-Out Generalization Verification
-- **Selected Champion**: Logistic Regression (`C=1.0`, `max_iter=1000`, `StandardScaler`, `SimpleImputer(median)`)
-- **Validation CV F1-Macro**: `0.9764` (evaluated on training folds only)
-- **Held-Out Test F1-Macro**: `0.9825` (evaluated on strictly withheld 114 test rows)
-- **Held-Out Test Accuracy**: `0.9825`
-- **Held-Out Test ROC-AUC**: `0.9954`
-- **Generalization Gap**: `+0.0061` (Test score matches validation estimate, proving zero data leakage or selection bias)
-- **MLflow Tracking Run**: Parent Run ID `d52a66aecd5c40db9c345599e2bd8d04`
-
----
-
-## 8. Installation & Environment Setup
+## 9. Installation and Setup
 
 ### Prerequisites
-- Python 3.10, 3.11, or 3.12
-- Git
 
-### 1. Clone & Set Up Virtual Environment
+- Python 3.10 or later.
+- Git.
+- pip.
+- Groq API key (optional).
+
+### Step 1: Clone the Repository
+
 ```bash
-# Clone the repository
 git clone https://github.com/HimanshuMali701/automl-experiment-orchestrator.git
-cd automl-experiment-orchestrator
 
-# Create virtual environment
+cd automl-experiment-orchestrator
+```
+
+### Step 2: Create a Virtual Environment
+
+Windows:
+
+```bash
+python -m venv venv
+```
+
+Activate the environment:
+
+```bash
+.\venv\Scripts\activate
+```
+
+Linux/macOS:
+
+```bash
 python -m venv venv
 
-# Activate virtual environment
-# Windows PowerShell:
-.\venv\Scripts\activate
-# Linux / macOS:
 source venv/bin/activate
 ```
 
-### 2. Install Dependencies
+### Step 3: Install Dependencies
+
 ```bash
+python -m pip install --upgrade pip
+
 pip install -r requirements.txt
 ```
 
-### 3. Environment Configuration
-Create a `.env` file in the project root:
+### Step 4: Configure Environment Variables
+
+Create a `.env` file in the project root.
+
 ```ini
-# Networking
+# API Configuration
 API_HOST=127.0.0.1
 API_PORT=8000
+
+# Backend URL
 AUTOML_API_BASE_URL=http://127.0.0.1:8000
 
-# Concurrency & Resource Limits
+# Resource Management
 MAX_CONCURRENT_JOBS=2
 MAX_UPLOAD_SIZE_MB=50
 MAX_DATASET_ROWS=100000
 MAX_DATASET_COLS=200
 MAX_TRAINING_TIME_SECONDS=600
 
-# Checkpointing Store
+# Checkpoint Storage
 CHECKPOINT_DB_PATH=./artifacts/checkpoints.db
 
-# MLflow Tracking Store
+# MLflow Configuration
 MLFLOW_TRACKING_URI=file:./mlruns
 MLFLOW_DEFAULT_EXPERIMENT_NAME=automl-experiments
 
-# Optional Groq LLM (Leave blank for deterministic fallback)
-GROQ_API_KEY=
+# Groq Configuration
+GROQ_API_KEY=your_groq_api_key
 GROQ_MODEL=openai/gpt-oss-20b
 ```
 
+**Note:** Groq integration is optional if deterministic fallback is enabled. Use the model identifier supported by your Groq account and the application's provider configuration.
+
+Never commit your actual `.env` file or API credentials to GitHub.
+
 ---
 
-## 9. Running the System
+## 10. Running the Application
 
-For local interactive development, run the backend and dashboard in **two separate terminal windows**:
+The application consists of two independently running services.
 
-### Terminal 1: Launch FastAPI Backend
+Open two separate terminals from the project root.
+
+### Terminal 1: Start FastAPI Backend
+
+Activate the virtual environment:
+
 ```bash
-# Activate virtual environment
 .\venv\Scripts\activate
+```
 
-# Launch Uvicorn server
+Run the backend:
+
+```bash
 uvicorn automl.api.app:app --host 127.0.0.1 --port 8000 --reload
 ```
-Interactive OpenAPI documentation will be accessible at: `http://127.0.0.1:8000/docs`
 
-### Terminal 2: Launch Streamlit Dashboard
+Backend URL:
+
+```text
+http://127.0.0.1:8000
+```
+
+Interactive API documentation:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### Terminal 2: Start Streamlit Frontend
+
+Activate the virtual environment:
+
 ```bash
-# Activate virtual environment
 .\venv\Scripts\activate
+```
 
-# Launch Streamlit dashboard
+Start Streamlit:
+
+```bash
 streamlit run src/automl/ui/app.py --server.port 8501
 ```
-Open your browser at: `http://localhost:8501`
 
-### Programmatic Headless Journey
-To simulate the complete end-to-end user journey programmatically from raw CSV ingestion to final test set evaluation:
+Dashboard URL:
+
+```text
+http://localhost:8501
+```
+
+### Running the Complete Demo
+
+To execute the programmatic end-to-end demonstration:
+
 ```bash
 python examples/run_ui_journey_demo.py
 ```
 
 ---
 
-## 10. REST API Specification
+## 11. REST API Documentation
+
+The FastAPI backend exposes REST endpoints for dataset validation, experiment management, approval, and result retrieval.
 
 | Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/health` | Service health status, active job count, and system configuration. |
-| `POST` | `/datasets/validate` | Validates uploaded CSV, infers schema, checks health warnings, and returns dataset ID. |
-| `POST` | `/experiments` | Submits experiment with target column, constraints, and optional approval flag. |
-| `GET` | `/experiments/{id}` | Returns current job lifecycle status (`QUEUED`, `RUNNING`, `WAITING_FOR_APPROVAL`, `COMPLETED`, `FAILED`). |
-| `GET` | `/experiments/{id}/results` | Returns ranked model leaderboard, baseline comparisons, test metrics, and explanations. |
-| `GET` | `/experiments/{id}/approval` | Retrieves pending experiment plan and validation summary when waiting for approval. |
-| `POST` | `/experiments/{id}/approval` | Submits human decision (`approved=True/False`) with optional feedback to resume/abort execution. |
-| `GET` | `/experiments/{id}/trace` | Returns real-time streaming observability trace, node durations, state diffs, and routing logs. |
+|---|---|---|
+| GET | `/health` | Backend health and job information |
+| POST | `/datasets/validate` | Upload and validate a CSV dataset |
+| POST | `/experiments` | Create a new experiment |
+| GET | `/experiments/{id}` | Retrieve experiment status |
+| GET | `/experiments/{id}/results` | Retrieve leaderboard and results |
+| GET | `/experiments/{id}/approval` | Retrieve pending approval details |
+| POST | `/experiments/{id}/approval` | Approve or reject an experiment |
+| GET | `/experiments/{id}/trace` | Retrieve workflow execution trace |
+
+### API Documentation
+
+Once the backend is running, access:
+
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- ReDoc: `http://127.0.0.1:8000/redoc`
 
 ---
 
-## 11. Interactive UI & Agent Workflow Inspector
+## 12. Dashboard Workflow
 
-The Streamlit dashboard (`src/automl/ui/app.py`) provides an end-to-end interface structured across 7 workflow stages plus an observability tab:
+The Streamlit dashboard provides an interactive interface for the complete experimentation process.
 
-1. **Dataset Ingestion & Validation**: Drag-and-drop CSV upload, row/column size checks, and instant health diagnostics.
-2. **Dataset Profile & Diagnostics**: Interactive statistical profile showing datatype distributions, missing value counts, and class balance ratios.
-3. **Configure & Launch Experiment**: Select target column, override primary optimization metric, configure CV folds, set test split size, and enable Human-in-the-Loop approval.
-4. **Execution Progress & Human Approval**: Real-time stage polling with dynamic stage indicators and an interactive Plan Approval Panel (Review Proposed Candidates, Approve, or Reject).
-5. **Model Benchmark Leaderboard**: Interactive leaderboard comparing candidate models against majority/mean baselines with validation CV mean and variance.
-6. **Candidate Detail & Hyperparameters**: Deep-dive inspector displaying exact hyperparameters, fold-level score distributions, and training durations.
-7. **Final Report & Champion Insights**: Generalization verification displaying held-out test set performance, generalization gap, grounded LLM executive summaries, and MLflow run links.
-8. **Agent Workflow Inspector**: Live telemetry visualizing node execution durations, state transition summaries, routing decisions, LLM proposal/repair attempts, and raw JSON traces.
+### Stage 1: Dataset Ingestion and Validation
+
+- Upload CSV datasets.
+- Validate dataset structure.
+- Inspect row and column counts.
+- Check dataset health.
+
+### Stage 2: Dataset Profile and Diagnostics
+
+- Review dataset statistics.
+- Inspect missing values.
+- Analyze feature types.
+- Identify classification or regression tasks.
+
+### Stage 3: Configure and Launch Experiment
+
+- Select target column.
+- Configure experiment constraints.
+- Select evaluation metric.
+- Configure cross-validation folds.
+- Set test split ratio.
+- Enable or disable human approval.
+
+### Stage 4: Execution Progress and Human Approval
+
+- Monitor workflow execution.
+- Track current processing stage.
+- Review proposed model configurations.
+- Approve or reject experiment plans.
+- Observe execution progress.
+
+### Stage 5: Model Benchmark Leaderboard
+
+- Compare candidate models.
+- Review validation metrics.
+- Compare candidates against baselines.
+- Identify the champion model.
+
+### Stage 6: Candidate Details and Hyperparameters
+
+- Inspect individual model configurations.
+- Review hyperparameters.
+- Examine fold-level scores.
+- Compare training durations.
+
+### Stage 7: Final Report and Champion Insights
+
+- Review final test metrics.
+- Examine generalization performance.
+- View champion explanations.
+- Inspect MLflow experiment tracking information.
+
+### Agent Workflow Inspector
+
+The observability interface provides:
+
+- Workflow node execution history.
+- Execution duration.
+- State transitions.
+- Conditional routing information.
+- Plan repair logs.
+- Failure diagnosis traces.
+- Raw execution details.
 
 ---
 
-## 12. Automated Verification & Testing
+## 13. Testing and Verification
 
-The repository contains an exhaustive automated test suite covering unit tests, integration tests, data leakage guards, schema validation, and complete end-to-end scenarios.
+The project includes unit tests and integration tests covering core application functionality.
 
-### Run All Automated Tests
+### Run All Tests
+
 ```bash
 pytest -v
 ```
 
-### Test Suite Structure
-| Test File | Focus & Scope |
-| :--- | :--- |
-| `tests/unit/test_env_sanity.py` | Virtual environment, Python version, dependencies, and path sanity. |
-| `tests/unit/test_profiler.py` | Statistical profiling, datatype inference, target task detection, and quality warnings. |
-| `tests/unit/test_trainer.py` | Leakage-free fold pipelines, stratified splitting, metric calculation, and baseline comparison. |
-| `tests/unit/test_planner.py` | Schema parsing, catalog allowlists, prompt templates, and deterministic fallback. |
-| `tests/unit/test_tracking.py` | MLflow run creation, metric logging, dataset fingerprinting, and artifact saving. |
-| `tests/unit/test_workflow.py` | LangGraph state transitions, retry limits, and error handling. |
-| `tests/unit/test_user_constraints.py` | User constraint propagation from API/UI to workflow and trainer. |
-| `tests/unit/test_planner_reflection.py` | Bounded plan repair loop, validation feedback reflection, and retry exhaustion. |
-| `tests/unit/test_adaptive_recovery.py` | Failure diagnosis taxonomy, parameter adaptations, and recovery routing. |
-| `tests/unit/test_approval.py` | Human-in-the-loop checkpoint pauses, state resumption, and rejection handling. |
-| `tests/unit/test_observability.py` | Streaming event bus, node timing measurements, and trace retrieval endpoints. |
-| `tests/unit/test_qa_portfolio_readiness.py` | Zero-leakage verification, regression/classification suites, zero-LLM resilience. |
-| `tests/unit/test_ui.py` | Streamlit AppTest component rendering and API client resilience. |
-| `tests/integration/test_api.py` | FastAPI REST endpoints, job lifecycle transitions, and RFC-7807 error responses. |
-| `tests/integration/test_scenarios_e2e.py` | Comprehensive verification of End-to-End Scenarios A through L. |
+### Run Unit Tests
+
+```bash
+pytest tests/unit -v
+```
+
+### Run Integration Tests
+
+```bash
+pytest tests/integration -v
+```
+
+### Test Coverage
+
+| Test Module | Testing Scope |
+|---|---|
+| `test_env_sanity.py` | Environment and dependency validation |
+| `test_profiler.py` | Dataset profiling |
+| `test_trainer.py` | Model training and preprocessing |
+| `test_planner.py` | Experiment planning |
+| `test_tracking.py` | MLflow tracking |
+| `test_workflow.py` | LangGraph workflow execution |
+| `test_user_constraints.py` | User constraint propagation |
+| `test_planner_reflection.py` | Plan repair and validation |
+| `test_adaptive_recovery.py` | Failure diagnosis and recovery |
+| `test_approval.py` | Human approval and checkpointing |
+| `test_observability.py` | Workflow tracing |
+| `test_qa_portfolio_readiness.py` | End-to-end quality checks |
+| `test_ui.py` | Streamlit UI testing |
+| `test_api.py` | API integration |
+| `test_scenarios_e2e.py` | End-to-end workflow scenarios |
+
+### Verified End-to-End Scenarios
+
+The documented integration suite covers the following scenarios:
+
+| Scenario | Description |
+|---|---|
+| A | Normal classification workflow |
+| B | Normal regression workflow |
+| C | LLM unavailable and deterministic fallback |
+| D | Invalid LLM plan and successful repair |
+| E | Invalid plan and retry exhaustion |
+| F | Candidate failure and adaptive recovery |
+| G | Unrecoverable candidate failure |
+| H | Human approval and successful resume |
+| I | Human rejection |
+| J | Custom experiment constraints |
+| K | MLflow tracking and artifact persistence |
+| L | Real-time workflow observability |
 
 ---
 
-## 13. Security, Guardrails & Resource Governance
+## 14. Security and Resource Management
 
 ### Security Guardrails
-- **Zero Arbitrary Execution**: Users cannot provide arbitrary Python code, shell commands, or unvetted model imports.
-- **Strict Model Allowlisting**: Only verified Scikit-Learn estimators from `src/automl/planner/catalogue.py` are instantiated.
-- **Privacy Masking**: Raw dataset rows are never persisted in MLflow tags or server logs; only statistical summaries and SHA-256 hashes are stored.
-- **Defensive Error Handling**: Internal exceptions are caught and sanitized to prevent exposing system paths, database credentials, or API keys.
+
+The platform incorporates several safety mechanisms:
+
+- No arbitrary Python or shell command execution from LLM responses.
+- Strict model catalogue and hyperparameter validation.
+- Structured output validation using Pydantic.
+- Sanitized exception handling.
+- Dataset privacy considerations.
+- API credentials managed through environment variables.
 
 ### Resource Limits
-- `MAX_UPLOAD_SIZE_MB`: 50 MB
-- `MAX_DATASET_ROWS`: 100,000 rows
-- `MAX_DATASET_COLS`: 200 columns
-- `MAX_CONCURRENT_JOBS`: 2 active training jobs (returns HTTP 429 when saturated)
-- `MAX_TRAINING_TIME_SECONDS`: 600 seconds per-experiment ceiling
+
+| Configuration | Default |
+|---|---:|
+| Maximum Upload Size | 50 MB |
+| Maximum Dataset Rows | 100,000 |
+| Maximum Dataset Columns | 200 |
+| Maximum Concurrent Jobs | 2 |
+| Maximum Training Time | 600 seconds |
+
+These limits help prevent excessive resource consumption during experimentation.
 
 ---
 
-## 14. Engineering Limitations & Roadmap
+## 15. Current Limitations and Future Improvements
 
-### Honest Engineering Appraisal
-1. **Tabular Focus**: Specializes in structured tabular datasets; does not ingest computer vision, raw text corpora, or sequential time-series data.
-2. **Local Background Queue**: Uses an in-memory `ThreadPoolExecutor` and local disk persistence. Multi-node cloud deployments require replacing `JobManager` with a distributed queue (e.g. Celery + Redis).
-3. **Model Selection**: Currently benchmarks standard Scikit-Learn estimators. Deep learning architectures (PyTorch/TensorFlow) and multi-GPU distributed training are excluded.
+### Current Limitations
+
+**1. Structured Tabular Data**
+
+The platform currently focuses on structured tabular datasets. Computer vision, raw text classification, and time-series experimentation are outside the current scope.
+
+**2. Local Background Job Management**
+
+The current implementation uses a local background execution mechanism. Distributed production deployments would require a dedicated task queue and shared state infrastructure.
+
+**3. Traditional Machine Learning Models**
+
+The current model catalogue focuses on Scikit-Learn estimators rather than deep learning or distributed GPU training.
+
+**4. Deployment Scalability**
+
+The current local persistence and job management architecture should be adapted before multi-instance production deployment.
 
 ### Future Roadmap
-- [ ] Add LightGBM, XGBoost, and CatBoost to the verified candidate catalogue.
-- [ ] Add Celery + Redis distributed background task backend.
-- [ ] Add automated probability calibration (Isotonic/Platt) and custom cost-matrix threshold tuning.
-- [ ] Add TreeSHAP and permutation feature importance visualizations to the Streamlit report view.
-- [ ] Add one-click Dockerfile and ONNX runtime export for the champion model.
+
+- [ ] Add XGBoost, LightGBM, and CatBoost.
+- [ ] Introduce Celery and Redis for distributed job execution.
+- [ ] Add feature importance and explainability using SHAP.
+- [ ] Introduce automated probability calibration.
+- [ ] Add custom cost-sensitive model evaluation.
+- [ ] Support champion model export using ONNX.
+- [ ] Add Docker-based deployment.
+- [ ] Expand support for additional machine learning tasks.
 
 ---
 
-## License
-MIT License. Created for production-grade AutoML experimentation and portfolio demonstration.
+## 16. License
+
+This project is licensed under the MIT License.
+
+---
+
+## Author
+
+**Himanshu Mali**
+
+Computer Engineering Student | AI/ML Enthusiast | Software Developer
+
+- GitHub: [HimanshuMali701](https://github.com/HimanshuMali701)
+- Project Repository: [AutoML Experiment Orchestrator](https://github.com/HimanshuMali701/automl-experiment-orchestrator)
+
+**Built to explore the intersection of Agentic AI, Machine Learning Automation, and Reliable Software Engineering.**

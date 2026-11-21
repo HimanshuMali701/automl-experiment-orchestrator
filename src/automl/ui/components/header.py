@@ -16,7 +16,7 @@ def render_header() -> None:
         st.header("🔌 Backend Connectivity")
         api_url = st.text_input(
             "FastAPI Base URL",
-            value=st.session_state.get("api_base_url", "https://automl-backend-trtp.onrender.com/"),
+            value=st.session_state.get("api_base_url", "https://automl-backend-trtp.onrender.com"),
             help="Base address of the running FastAPI backend server.",
         )
         if api_url != st.session_state.get("api_base_url"):
@@ -44,7 +44,9 @@ def render_header() -> None:
             st.session_state["last_health_check_error"] = str(exc)
             st.error("Backend Offline", icon="🔴")
             st.caption(
-                "Launch backend in terminal:\n\n"
+                "Verify your backend service at:\n\n"
+                "`https://automl-backend-trtp.onrender.com`\n\n"
+                "Or launch local backend in terminal:\n\n"
                 "`uvicorn automl.api.app:app --host 127.0.0.1 --port 8000`"
             )
 

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # API settings
     api_host: str = "127.0.0.1"
     api_port: int = Field(default=8000, ge=1024, le=65535)
+    automl_api_base_url: str = Field(
+        default="https://automl-backend-trtp.onrender.com",
+        description="Base URL for the AutoML backend API server",
+    )
     max_concurrent_jobs: int = Field(default=2, ge=1, le=16, description="Max concurrent background jobs")
 
     # Optional LLM integration (Groq)
